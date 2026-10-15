@@ -59,6 +59,11 @@ the yearly grid.
 Regenerate with \code{data-raw/make_synthetic_claims.R}; \code{data-raw/GENERATION.txt} records the
 generator call and the software versions used.
 }
+\examples{
+data("synthetic_claims", package = "baggingReserve")
+str(synthetic_claims)
+table(synthetic_claims$AccYear)
+}
 \seealso{
 \link{synthetic_payments}, \link{synthetic_claims_full}, \link{synthetic_payments_full}
 

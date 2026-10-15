@@ -85,12 +85,16 @@ cp_min_xerror <- function(fit) {
   unname(cpt[which.min(xe), "CP"])
 }
 
-slim_rpart <- function(fit) {
-  # keep everything predict.rpart() needs (frame, splits, csplit, where, terms, ...) but
-  # drop the copies of the training data and the formula environment
+slim_rpart <- function(fit, keep_cptable = TRUE) {
+  # keep what predict.rpart() needs (frame, splits, csplit, terms, attributes) and drop the
+  # copies of the training data, the formula environment and `where` (the leaf of every
+  # training row, a named vector as long as the training data that prediction never uses);
+  # the bootstrap trees also drop the complexity table, which only the single trees report
   fit$call <- NULL
   fit$y <- NULL
   fit$x <- NULL
+  fit$where <- NULL
+  if (!keep_cptable) fit$cptable <- NULL
   attr(fit$terms, ".Environment") <- NULL
   fit
 }

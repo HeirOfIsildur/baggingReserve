@@ -22,9 +22,9 @@
 #' @param prune `"min_xerror"` (default) prunes at the first minimum of the
 #'   cross-validated error (requires `xval > 0`); `"none"` keeps the full tree.
 #' @param seed Optional integer passed to [set.seed()] before the first fit (the
-#'   cross-validation folds are random). With `NULL` the current random number generator
-#'   state is used and recorded; the caller's state is restored on exit, so two such calls
-#'   with nothing drawn in between give the same folds.
+#'   cross-validation folds are random); the caller's generator state is then restored on
+#'   exit. With `NULL` the current generator state is used, recorded in the result and
+#'   advanced, as by any random draw in \R, so that repeated calls give different folds.
 #' @return An object of class `c("reserve_tree", "reserve_fit")`: a list with the
 #'   fitted trees (`fits`, one per development year, `fits[[l + 1]]` for development year
 #'   `l`), the chosen complexity parameters (`cp_chosen`, `NA` where no pruning was
@@ -53,19 +53,20 @@ reserve_tree <- function(panel, control = rpart::rpart.control(cp = 0, xval = 10
          call. = FALSE)
   if (panel$L < 1L) stop("nothing to predict: L must be at least 1", call. = FALSE)
 
+  if (!is.null(seed)) seed <- as_scalar_integer(seed, "seed")
   rng <- begin_rng(seed)
   on.exit(rng$restore(), add = TRUE)
 
   L <- panel$L
   fits <- vector("list", L)
   cp_chosen <- rep(NA_real_, L)
-  n_train <- integer(L)
+  n_train <- vapply(0:(L - 1L), function(l) length(period_rows_train(panel, l)), 1L)
+  if (any(n_train < 2L)) stop_sparse_periods(n_train)
+  constant <- logical(L)
   for (l in 0:(L - 1L)) {
     rows <- period_rows_train(panel, l)
-    n_train[l + 1L] <- length(rows)
-    if (length(rows) < 2L)
-      stop("period ", l, ": only ", length(rows), " training claim(s)", call. = FALSE)
     frame <- period_frame(panel, rows, l, response = TRUE)
+    constant[l + 1L] <- length(unique(frame[[paste0("X", l + 1L)]])) == 1L
     fit <- fit_period_rpart(frame, l, control)
     if (prune == "min_xerror") {
       cp_chosen[l + 1L] <- cp_min_xerror(fit)
@@ -75,7 +76,8 @@ reserve_tree <- function(panel, control = rpart::rpart.control(cp = 0, xval = 10
   }
 
   structure(list(
-    fits = fits, cp_chosen = cp_chosen, n_train = n_train,
+    fits = fits, cp_chosen = cp_chosen, n_train = n_train, constant_response = constant,
+    train_levels = period_train_levels(panel),
     prune = prune, control = control, panel = panel,
     features = panel$features, feature_levels = panel$feature_levels, L = L, t = panel$t,
     rng = rng$info, call = match.call(),
@@ -95,11 +97,13 @@ print.reserve_tree <- function(x, ...) {
   leaves <- vapply(x$fits, function(f) sum(f$frame$var == "<leaf>"), 1L)
   print(data.frame(period = 0:(x$L - 1L), n_train = x$n_train,
                    cp = signif(x$cp_chosen, 4), leaves = leaves), row.names = FALSE)
+  if (!is.null(x$constant_response)) note_constant_periods(x$constant_response)
   invisible(x)
 }
 
-# RNG bookkeeping shared by reserve_tree() and bag_reserve(): optionally seed, record what
-# was used so that a run can be repeated, and always restore the caller's state on exit.
+# RNG bookkeeping of reserve_tree(): optionally seed, and record what was used so that a run
+# can be repeated. With a seed the caller's state is restored on exit; without one the draws
+# advance the caller's stream, as any random draw does.
 begin_rng <- function(seed) {
   had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
   old <- if (had_seed) get(".Random.seed", envir = globalenv(), inherits = FALSE) else NULL
@@ -112,6 +116,7 @@ begin_rng <- function(seed) {
                  state = get(".Random.seed", envir = globalenv(), inherits = FALSE))
   }
   list(info = info, restore = function() {
+    if (is.null(seed)) return(invisible(NULL))
     if (had_seed) assign(".Random.seed", old, envir = globalenv())
     else if (exists(".Random.seed", envir = globalenv(), inherits = FALSE))
       rm(".Random.seed", envir = globalenv())

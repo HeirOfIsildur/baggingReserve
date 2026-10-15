@@ -6,7 +6,7 @@
 \usage{
 ibnr_reserve(
   pred,
-  counts,
+  counts = NULL,
   projection = c("chain_ladder", "incremental_ratio"),
   round = FALSE
 )
@@ -15,8 +15,12 @@ ibnr_reserve(
 \item{pred}{A \link{reserve_prediction} (from \code{predict()} on a fit). An existing IBNR
 component is replaced.}
 
-\item{counts}{The \emph{incremental} reporting-count triangle, \code{\link[=claim_counts]{claim_counts()}} of the same
-panel: the same dimensions, observation mask, accident years and valuation date as
+\item{counts}{The \emph{incremental} reporting-count triangle of the panel the prediction was
+made for. \code{NULL} (default) uses the triangle stored in the prediction
+(\code{\link[=claim_counts]{claim_counts()}} of that panel). A supplied triangle must agree with the stored one in
+its observed cells (it can only differ in how it is passed, e.g. without attributes);
+for a prediction made by an older version of the package, which stores no counts, it
+must have the same dimensions, observation mask, accident years and valuation date as
 the prediction, with finite non-negative integer observed cells.}
 
 \item{projection}{Count projection, \code{"chain_ladder"} (default) or \code{"incremental_ratio"};
@@ -49,9 +53,12 @@ after the valuation date with delay \eqn{\le l}, times \eqn{\hat\mu_l}.
 The estimator assumes that the pooled payment per development year of the reported
 claims applies to the claims reported late; a payment pattern that depends on the
 reporting delay or a business mix that differs between early and late reporters
-invalidates it (see the JSS manuscript, Section 2.4). When no reported claim exists in a
-development year the mean is unidentified: the IBNR payments of that year are \code{NA} with
-a warning.
+invalidates it (see the JSS manuscript, Section 2.4).
+
+An accident year without any reported claim at the valuation date has an all-zero row in
+the count triangle, and the chain ladder projects no late-reported claims from it: such
+years get no IBNR payments, with a warning. Supply an external count projection, or fewer
+accident years, when this matters.
 
 With \code{projection = "incremental_ratio"} and \code{round = TRUE} the count projection uses
 the source article's incremental-ratio factors and rounding convention: undefined

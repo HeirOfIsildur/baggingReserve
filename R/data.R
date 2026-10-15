@@ -48,6 +48,10 @@
 #'   formerly JSchelldorfer/IndividualClaimsSimulator, the location the vendored copy was taken from).
 #' @seealso [synthetic_payments], [synthetic_claims_full], [synthetic_payments_full]
 #' @family synthetic data
+#' @examples
+#' data("synthetic_claims", package = "baggingReserve")
+#' str(synthetic_claims)
+#' table(synthetic_claims$AccYear)
 "synthetic_claims"
 
 #' Synthetic claim payments observed at the reserving date
@@ -69,6 +73,10 @@
 #' }
 #' @inherit synthetic_claims source
 #' @family synthetic data
+#' @examples
+#' data("synthetic_payments", package = "baggingReserve")
+#' head(synthetic_payments)
+#' tapply(synthetic_payments$Paid, synthetic_payments$EventYear, sum)
 "synthetic_payments"
 
 #' Synthetic individual claims: the generated truth
@@ -91,6 +99,10 @@
 #' }
 #' @inherit synthetic_claims source
 #' @family synthetic data
+#' @examples
+#' data("synthetic_claims", "synthetic_claims_full", package = "baggingReserve")
+#' # claims reported after the valuation date t = 12 (the IBNR claims)
+#' sum(!synthetic_claims_full$Id %in% synthetic_claims$Id)
 "synthetic_claims_full"
 
 #' Synthetic claim payments: the generated truth
@@ -103,4 +115,9 @@
 #' @format A data frame with the columns of [synthetic_payments].
 #' @inherit synthetic_claims source
 #' @family synthetic data
+#' @examples
+#' data("synthetic_payments_full", package = "baggingReserve")
+#' # realised payments after the valuation date t = 12, by calendar year
+#' fut <- synthetic_payments_full[synthetic_payments_full$EventYear > 12, ]
+#' tapply(fut$Paid, fut$EventYear, sum)
 "synthetic_payments_full"

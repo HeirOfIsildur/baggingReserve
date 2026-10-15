@@ -13,7 +13,8 @@ backtest(
   event_year = "EventYear",
   paid = "Paid",
   probs = c(0.025, 0.975),
-  rep_year = "RepYear"
+  rep_year = "RepYear",
+  type = 7L
 )
 }
 \arguments{
@@ -26,7 +27,10 @@ backtest(
 \item{probs}{Two increasing probabilities in \verb{[0, 1]} defining the replicate range shown.}
 
 \item{rep_year}{Name of the reporting-year column of \code{claims}, used for the population
-check above when present; ignored otherwise.}
+checks above when present; ignored otherwise.}
+
+\item{type}{Quantile algorithm for the replicate range, as in \code{\link[stats:quantile]{stats::quantile()}}
+(default 7, as in \code{\link[=summary.reserve_prediction]{summary.reserve_prediction()}}).}
 }
 \value{
 An object of class \code{"reserve_backtest"}: per component a data frame with one

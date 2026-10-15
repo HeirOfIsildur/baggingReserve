@@ -32,6 +32,11 @@ uncensored settlement information. Used to back-test predictions of the
 outstanding liabilities. IBNR claims at \eqn{t = 12} are those whose \code{Id} is not
 in \link{synthetic_claims}.
 }
+\examples{
+data("synthetic_claims", "synthetic_claims_full", package = "baggingReserve")
+# claims reported after the valuation date t = 12 (the IBNR claims)
+sum(!synthetic_claims_full$Id \%in\% synthetic_claims$Id)
+}
 \seealso{
 Other synthetic data:
 \code{\link{synthetic_claims}},

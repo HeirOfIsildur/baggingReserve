@@ -2,14 +2,14 @@
 % Please edit documentation in R/plot.R
 \name{plot.reserve_tree}
 \alias{plot.reserve_tree}
-\title{Plot one period tree of a fit}
+\title{Plot the tree of one development year of a fit}
 \usage{
 \method{plot}{reserve_tree}(x, period = 0L, ...)
 }
 \arguments{
 \item{x}{A \link{reserve_tree} fit.}
 
-\item{period}{Development period \code{l} whose tree is drawn.}
+\item{period}{Development year \code{l} (\verb{0, ..., L - 1}) whose tree is drawn.}
 
 \item{...}{Passed to \code{\link[rpart:plot.rpart]{rpart::plot.rpart()}}.}
 }
@@ -17,5 +17,12 @@
 \code{x}, invisibly.
 }
 \description{
-Plot one period tree of a fit
+Plot the tree of one development year of a fit
+}
+\examples{
+data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+cl <- synthetic_claims[synthetic_claims$Type == "3", ]
+pay <- synthetic_payments[synthetic_payments$Id \%in\% cl$Id, ]
+panel <- claims_panel(cl, pay, t = 12, L = 11, features = c("Age", "AccWeekday"))
+plot(reserve_tree(panel, seed = 1), period = 0)
 }

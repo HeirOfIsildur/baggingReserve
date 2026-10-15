@@ -2,12 +2,21 @@
 % Please edit documentation in R/predict.R
 \name{calendar_year_payments}
 \alias{calendar_year_payments}
+\alias{calendar_year_payments.reserve_prediction}
+\alias{calendar_year_payments.default}
 \title{Payments by future calendar year}
 \usage{
-calendar_year_payments(x, component = c("total", "reported", "ibnr"))
+calendar_year_payments(x, ...)
+
+\method{calendar_year_payments}{reserve_prediction}(x, component = c("total", "reported", "ibnr"), ...)
+
+\method{calendar_year_payments}{default}(x, ...)
 }
 \arguments{
-\item{x}{A \link{reserve_prediction}.}
+\item{x}{A \link{reserve_prediction} (or a \link{chain_ladder} object, see
+\code{\link[=calendar_year_payments.chain_ladder]{calendar_year_payments.chain_ladder()}}).}
+
+\item{...}{Unused.}
 
 \item{component}{Component to aggregate; the default \code{"total"} sums reported-claim and
 IBNR payments when an IBNR component is attached and otherwise uses the reported-claim

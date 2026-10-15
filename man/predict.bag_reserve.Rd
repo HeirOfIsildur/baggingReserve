@@ -12,7 +12,12 @@
 \item{newdata}{\code{NULL} (default) completes the panel the model was fitted on. Otherwise
 another \link{claims_panel} with the same features in the same order, the same \code{L}, and
 factor levels among those seen at fitting time (a compatible subset is re-levelled;
-unseen levels are an error).}
+levels unknown to the fit are an error). It may have another valuation date \code{t} than
+the fitted panel: the trees then complete its cells after its own \code{t}. A factor level
+that the fit knows but that is absent from the training claims of the period in which
+a claim is completed gives a warning, here as when the fitted panel is completed: at
+each split on that feature the trees treat it as missing (surrogate splits, else the
+majority direction).}
 
 \item{type}{\code{"replicates"} returns every replicate; \code{"mean"} averages the completed
 replicates (for a single-tree fit the two coincide).}

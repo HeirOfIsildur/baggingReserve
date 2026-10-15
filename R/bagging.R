@@ -12,6 +12,11 @@
 #' of the future payments: the numbers of unreported claims are projected once and held
 #' fixed and no payment noise is simulated.
 #'
+#' A factor level absent from the training claims of a development year gives a warning
+#' (see [predict.reserve_tree()]). A rare level can also be missing from the bootstrap
+#' sample of one replicate while present in the training claims; that replicate's tree
+#' then treats it as missing without a warning, which is part of the resampling variation.
+#'
 #' The out-of-bag (OOB) score of development year `l` uses, for each training claim, the
 #' trees of the replicates in which it was not sampled (its out-of-bag predictions, or
 #' "votes"), predicts its observed `X_{l+1}` from its observed history, and compares:
@@ -25,18 +30,18 @@
 #' year) tasks, so the completed replicates do not depend on `ncores`, on the batching or on
 #' the scheduling of the workers under the same software; the out-of-bag sums are
 #' accumulated batch by batch and can differ in their last floating-point digits. The
-#' caller's generator state is restored on exit. Replicates are streamed: each worker fits
+#' caller's generator kind and state are restored on exit (after the one draw that makes the
+#' seed when `seed = NULL`). Replicates are streamed: each worker fits
 #' the trees of a replicate, records the OOB votes, aggregates the predicted future cells
 #' and discards the trees unless `keep_trees = TRUE`.
 #'
 #' @inheritParams reserve_tree
 #' @param B Number of bootstrap replicates (a positive integer; default 100).
 #' @param seed Integer seed of the stream allocation. `NULL` draws one from the current
-#'   generator and records it in the result. Because the caller's generator state is
-#'   restored on exit, two calls with `seed = NULL` and nothing drawn in between use the
-#'   same seed; give explicit seeds for distinct runs.
+#'   generator (advancing it, so that repeated calls differ) and records it in the result.
 #' @param ncores Number of worker processes (forked on Unix, a socket cluster elsewhere);
-#'   default 1, which runs serially. Values below one count as one.
+#'   default 1, which runs serially. Values below one count as one; values above the
+#'   number of cores detected are reduced to it, and the value used is recorded.
 #' @param control [rpart::rpart.control()] for the bootstrap trees (default `cp = 0`,
 #'   `xval = 0`).
 #' @param prune `"none"` (default) or `"min_xerror"` (needs `xval > 0` in `control`).
@@ -50,7 +55,8 @@
 #'   the completed replicates.
 #' @param backend `"auto"` forks workers on Unix and uses a socket cluster elsewhere;
 #'   `"fork"`, `"psock"` and `"serial"` force one backend. Results are the same for all of
-#'   them (up to floating-point summation order in the OOB sums).
+#'   them (up to floating-point summation order in the OOB sums). Socket workers load the
+#'   installed package, with a warning if its version differs from the one in use.
 #' @return An object of class `c("bag_reserve", "reserve_fit")`: a list with the cached
 #'   [reserve_prediction] of the fitted portfolio (`prediction`), the OOB table (`oob`,
 #'   `NULL` when `oob = FALSE`), the trees and bootstrap indices (`trees`, `inbag`; `NULL`
@@ -80,6 +86,8 @@ bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
   backend <- match.arg(backend)
   B <- as_scalar_integer(B, "B"); if (B < 1L) stop("`B` must be at least 1", call. = FALSE)
   ncores <- as_scalar_integer(ncores, "ncores"); if (ncores < 1L) ncores <- 1L
+  avail <- parallel::detectCores()
+  if (!is.na(avail) && ncores > avail) ncores <- as.integer(avail)
   if (prune == "min_xerror" && isTRUE(control$xval == 0))
     stop("prune = \"min_xerror\" needs cross-validation; set xval > 0 in `control`", call. = FALSE)
   if (panel$L < 1L) stop("nothing to predict: L must be at least 1", call. = FALSE)
@@ -93,12 +101,13 @@ bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
   ## training frames, shared by all replicates -----------------------------------------
   rows <- lapply(0:(L - 1L), function(l) period_rows_train(panel, l))
   n_train <- lengths(rows)
-  if (any(n_train < 2L))
-    stop("period(s) ", paste(which(n_train < 2L) - 1L, collapse = ", "),
-         " have fewer than two training claims", call. = FALSE)
+  if (any(n_train < 2L)) stop_sparse_periods(n_train)
   frames <- lapply(0:(L - 1L), function(l) period_frame(panel, rows[[l + 1L]], l, response = TRUE))
   responses <- lapply(0:(L - 1L), function(l) frames[[l + 1L]][[paste0("X", l + 1L)]])
+  constant <- vapply(responses, function(y) length(unique(y)) == 1L, TRUE)
   cells <- future_cells(panel)
+  train_levels <- period_train_levels(panel)
+  warn_unseen_levels(panel, train_levels)
 
   run_batch <- function(bs) {
     oob_sum <- if (oob) lapply(n_train, function(n) numeric(n)) else NULL
@@ -118,7 +127,7 @@ bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
         idx <- sample.int(n, n, replace = TRUE)
         fit <- fit_period_rpart(frames[[l + 1L]][idx, , drop = FALSE], l, control)
         if (prune == "min_xerror") fit <- prune_min_xerror(fit)
-        fit <- slim_rpart(fit)
+        fit <- slim_rpart(fit, keep_cptable = FALSE)
         if (oob) {
           out <- which(tabulate(idx, nbins = n) == 0L)
           if (length(out)) {
@@ -166,7 +175,7 @@ bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
                                                          rng = "L'Ecuyer-CMRG streams by replicate and period"))
   structure(list(
     B = B, prediction = prediction, oob = oob_tab, trees = trees, inbag = inbag,
-    n_train = n_train, control = control, prune = prune, keep_trees = keep_trees,
+    n_train = n_train, train_levels = train_levels, constant_response = constant, control = control, prune = prune, keep_trees = keep_trees,
     panel = panel, features = panel$features, feature_levels = panel$feature_levels,
     L = L, t = panel$t, rng = rng$info, ncores = ncores, backend = backend,
     elapsed_secs = as.numeric(difftime(Sys.time(), t0, units = "secs")),
@@ -179,7 +188,7 @@ oob_table <- function(responses, oob_sum, oob_cnt, n_train) {
   L <- length(responses)
   out <- data.frame(period = 0:(L - 1L), n_train = n_train, n_scored = NA_integer_,
                     coverage = NA_real_, mean_votes = NA_real_, oob_error = NA_real_,
-                    oob_score = NA_real_, response_var = NA_real_)
+                    oob_score = NA_real_, response_var = NA_real_, oob_score_covered = NA_real_)
   for (j in seq_len(L)) {
     y <- responses[[j]]; cnt <- oob_cnt[[j]]; covered <- cnt > 0L
     out$n_scored[j] <- sum(covered)
@@ -192,6 +201,8 @@ oob_table <- function(responses, oob_sum, oob_cnt, n_train) {
       sst <- sum((y - mean(y))^2)
       out$oob_error[j] <- sse / sum(covered)
       out$oob_score[j] <- if (sst > 0) 1 - sse / sst else NA_real_
+      yc <- y[covered]; sst_c <- sum((yc - mean(yc))^2)
+      out$oob_score_covered[j] <- if (sst_c > 0) 1 - sse / sst_c else NA_real_
     }
   }
   out
@@ -220,16 +231,26 @@ run_parallel <- function(tasks, fun, ncores, backend = "auto") {
   # a user or project library) is found there too
   parallel::clusterCall(cl, function(paths) { .libPaths(paths); invisible(NULL) }, .libPaths())
   parallel::clusterEvalQ(cl, library(baggingReserve))
+  # the workers load the installed package; a development copy loaded in the main process
+  # (e.g. with pkgload::load_all()) is not what they run
+  v_workers <- unique(unlist(parallel::clusterEvalQ(cl, as.character(utils::packageVersion("baggingReserve")))))
+  v_here <- as.character(utils::packageVersion("baggingReserve"))
+  if (!identical(v_workers, v_here))
+    warning("the socket workers run baggingReserve ", paste(v_workers, collapse = "/"),
+            " (installed) while this session runs ", v_here, call. = FALSE)
   parallel::parLapplyLB(cl, tasks, fun)
 }
 
 # L'Ecuyer-CMRG streams: stream b for replicate b (substreams for the periods are taken
-# inside the worker). Restores the caller's RNG kind and state on exit.
+# inside the worker). Restores the caller's RNG kind and state on exit; with seed = NULL the
+# restored state is the one after drawing the seed, so the caller's stream advances.
 begin_rng_streams <- function(seed, B) {
+  if (is.null(seed)) {
+    seed <- sample.int(.Machine$integer.max, 1L)       # from the caller's generator
+  }
   had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
   old <- if (had_seed) get(".Random.seed", envir = globalenv(), inherits = FALSE) else NULL
   old_kind <- RNGkind()
-  if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
   seed <- as_scalar_integer(seed, "seed")
   set.seed(seed, kind = "L'Ecuyer-CMRG", normal.kind = "Inversion", sample.kind = "Rejection")
   s <- get(".Random.seed", envir = globalenv(), inherits = FALSE)
@@ -269,7 +290,7 @@ print.summary.bag_reserve <- function(x, ...) {
       paste(c(x$features, "rep_delay"), collapse = ", "), "\n  control: cp = ", x$control$cp,
       ", xval = ", x$control$xval, ", minsplit = ", x$control$minsplit, ", minbucket = ",
       x$control$minbucket, "; pruning: ", x$prune, "; seed ", x$rng$seed, " (", x$rng$kind[1L],
-      "); ", round(x$elapsed_secs), " s; worker processes requested: ", x$ncores, "\n", sep = "")
+      "); ", round(x$elapsed_secs), " s; worker processes: ", x$ncores, "\n", sep = "")
   if (!is.null(x$oob)) { cat("  out-of-bag diagnostics:\n"); print(x$oob, row.names = FALSE, digits = 4) }
   print(x$prediction)
   invisible(x)
@@ -284,13 +305,14 @@ print.bag_reserve <- function(x, ...) {
   cat("  control: cp = ", x$control$cp, ", xval = ", x$control$xval, ", minsplit = ",
       x$control$minsplit, "; pruning: ", x$prune, "; trees kept: ", x$keep_trees,
       "; seed ", x$rng$seed, " (L'Ecuyer-CMRG streams); ", round(x$elapsed_secs),
-      " s; worker processes requested: ", x$ncores, "\n", sep = "")
+      " s; worker processes: ", x$ncores, "\n", sep = "")
   if (!is.null(x$oob)) {
     cat("  out-of-bag score per period:\n")
     o <- x$oob
     print(data.frame(period = o$period, n_train = o$n_train, coverage = round(o$coverage, 3),
                      oob_score = round(o$oob_score, 3)), row.names = FALSE)
   }
+  if (!is.null(x$constant_response)) note_constant_periods(x$constant_response)
   print(x$prediction)
   invisible(x)
 }
@@ -336,6 +358,7 @@ predict.bag_reserve <- function(object, newdata = NULL, type = c("replicates", "
       stop("the trees were not kept (keep_trees = FALSE); refit with keep_trees = TRUE to predict new data",
            call. = FALSE)
     panel <- check_newdata(object, newdata)
+    warn_unseen_levels(panel, object$train_levels)
     cells <- future_cells(panel)
     reported <- vapply(object$trees, function(models) {
       P <- complete_payments(panel, models, predict_period_rpart)
@@ -377,15 +400,21 @@ collapse_mean <- function(pred) {
 #' \enc{Janoušek}{Janousek} and \enc{Pešta}{Pesta} 2025). With `B` replicates a claim is
 #' covered with probability `1 - (1 - (1 - 1/n)^n)^B` in expectation, close to one for `B`
 #' of a few dozen or more; the observed `coverage = n_scored / n_train` reports it, and the
-#' score is `NA` when no claim is covered or the response has zero variance. The score is
-#' a diagnostic of the one-year regressions, not a validation of the recursive multi-year
+#' score is `NA` when no claim is covered or the response has zero variance. Because its
+#' numerator runs over the covered claims only, the score is biased upwards when the
+#' coverage is below one (small `B`); `oob_score_covered` is the ordinary coefficient of
+#' determination over the covered claims, which does not have that bias. A negative score
+#' means that the out-of-bag predictions are worse than the mean of the response, which is
+#' common for unpruned bootstrap trees (`cp = 0`) on noisy late development years;
+#' a larger `minbucket` or a positive `cp` in `control` smooths them. The score is a
+#' diagnostic of the one-year regressions, not a validation of the recursive multi-year
 #' forecast or of the IBNR component.
 #'
 #' @param object A [bag_reserve] fit created with `oob = TRUE` (otherwise an error).
 #' @return A data frame with one row per development year and the columns `period` (the
 #'   development-year index), `n_train`, `n_scored` (claims with at least one out-of-bag
 #'   vote), `coverage`, `mean_votes` (mean number of votes among the covered claims),
-#'   `oob_error`, `oob_score` and `response_var`.
+#'   `oob_error`, `oob_score`, `response_var` and `oob_score_covered`.
 #' @examples
 #' data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
 #' cl <- synthetic_claims[synthetic_claims$Type == "3", ]

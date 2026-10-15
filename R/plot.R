@@ -144,12 +144,18 @@ axis_scale <- function(values) {
 #' @param x A [bag_reserve] fit.
 #' @param ... Passed to [graphics::plot()].
 #' @return `x`, invisibly.
+#' @examples
+#' data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+#' cl <- synthetic_claims[synthetic_claims$Type == "3", ]
+#' pay <- synthetic_payments[synthetic_payments$Id %in% cl$Id, ]
+#' panel <- claims_panel(cl, pay, t = 12, L = 11, features = c("Age", "AccWeekday"))
+#' plot(bag_reserve(panel, B = 5, seed = 2026))
 #' @export
 plot.bag_reserve <- function(x, ...) {
   o <- oob_score(x)
-  graphics::plot(o$period, o$oob_score, type = "b", pch = 16, xlab = "Development period l",
+  graphics::plot(o$period, o$oob_score, type = "b", pch = 16, xlab = "Development year l (period)",
                  ylab = "Out-of-bag score",
-                 main = paste0("Out-of-bag score per period (B = ", x$B, ")"),
+                 main = paste0("Out-of-bag score per development year (B = ", x$B, ")"),
                  ylim = range(c(0, o$oob_score), na.rm = TRUE), ...)
   graphics::abline(h = 0, lty = 3)
   graphics::text(o$period, o$oob_score, labels = paste0("n=", format(o$n_train, big.mark = ",")),
@@ -157,23 +163,32 @@ plot.bag_reserve <- function(x, ...) {
   invisible(x)
 }
 
-#' Plot one period tree of a fit
+#' Plot the tree of one development year of a fit
 #'
 #' @param x A [reserve_tree] fit.
-#' @param period Development period `l` whose tree is drawn.
+#' @param period Development year `l` (`0, ..., L - 1`) whose tree is drawn.
 #' @param ... Passed to [rpart::plot.rpart()].
 #' @return `x`, invisibly.
+#' @examples
+#' data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+#' cl <- synthetic_claims[synthetic_claims$Type == "3", ]
+#' pay <- synthetic_payments[synthetic_payments$Id %in% cl$Id, ]
+#' panel <- claims_panel(cl, pay, t = 12, L = 11, features = c("Age", "AccWeekday"))
+#' plot(reserve_tree(panel, seed = 1), period = 0)
 #' @export
 plot.reserve_tree <- function(x, period = 0L, ...) {
+  period <- as_scalar_integer(period, "period")
+  if (period < 0L || period > x$L - 1L)
+    stop("`period` must be between 0 and L - 1 = ", x$L - 1L, call. = FALSE)
   fit <- x$fits[[period + 1L]]
   if (nrow(fit$frame) == 1L) {
     graphics::plot.new()
-    graphics::title(main = paste0("Period ", period, ": root only (predicts ",
+    graphics::title(main = paste0("Development year ", period, ": root only (predicts ",
                                   signif(fit$frame$yval, 4), ")"))
     return(invisible(x))
   }
   graphics::plot(fit, uniform = TRUE,
-                 main = paste0("Regression tree for development period ", period), ...)
+                 main = paste0("Regression tree for development year ", period), ...)
   graphics::text(fit, use.n = FALSE, cex = 0.7)
   invisible(x)
 }

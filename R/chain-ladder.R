@@ -19,8 +19,10 @@
 #'
 #' @param triangle Numeric matrix with `NA` in the unobserved cells; each row must be
 #'   observed in a leading block of columns. Typically [as_triangle()] output.
-#' @param input Whether `triangle` holds `"incremental"` (default) or `"cumulative"`
-#'   amounts; this is not inferred from the triangle's attributes.
+#' @param input Whether `triangle` holds `"incremental"` or `"cumulative"` amounts. `NULL`
+#'   (default) takes it from the triangle's `"cumulative"` attribute, which [as_triangle()]
+#'   sets, and assumes incremental amounts when the attribute is absent. An explicit value
+#'   that contradicts the attribute is an error.
 #' @param projection `"chain_ladder"` (default) or `"incremental_ratio"`, as described
 #'   above.
 #' @return An object of class `"chain_ladder"`: a list with `factors` (one per
@@ -35,9 +37,18 @@
 #' cl
 #' round(cl$outstanding)
 #' @export
-chain_ladder <- function(triangle, input = c("incremental", "cumulative"),
+chain_ladder <- function(triangle, input = NULL,
                          projection = c("chain_ladder", "incremental_ratio")) {
-  input <- match.arg(input)
+  flag <- attr(triangle, "cumulative")
+  flag <- if (is.logical(flag) && length(flag) == 1L && !is.na(flag)) flag else NULL
+  if (is.null(input)) {
+    input <- if (isTRUE(flag)) "cumulative" else "incremental"
+  } else {
+    input <- match.arg(input, c("incremental", "cumulative"))
+    if (!is.null(flag) && flag != (input == "cumulative"))
+      stop("`input = \"", input, "\"` contradicts the triangle, which is ",
+           if (flag) "cumulative" else "incremental", " (attribute \"cumulative\")", call. = FALSE)
+  }
   projection <- match.arg(projection)
   M <- as.matrix(triangle)
   if (!is.numeric(M) || ncol(M) < 2L)
@@ -116,9 +127,24 @@ print.chain_ladder <- function(x, digits = 4L, ...) {
 
 #' Future payments of a chain-ladder projection by calendar year
 #'
+#' `calendar_year_payments()` on a [chain_ladder] object, and its older name
+#' `chain_ladder_calendar()`, sum the projected incremental cells after the valuation date
+#' by calendar year (accident year plus development year).
+#'
 #' @param x A [chain_ladder] object whose columns are development years starting at 0 and
 #'   whose row names are the accident years.
+#' @param ... Unused.
 #' @return Named vector of projected payments per future calendar year and a `total`.
+#' @examples
+#' data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+#' cl <- synthetic_claims[synthetic_claims$Type == "3", ]
+#' pay <- synthetic_payments[synthetic_payments$Id %in% cl$Id, ]
+#' panel <- claims_panel(cl, pay, t = 12, L = 11)
+#' calendar_year_payments(chain_ladder(as_triangle(panel)))
+#' @export
+calendar_year_payments.chain_ladder <- function(x, ...) chain_ladder_calendar(x)
+
+#' @rdname calendar_year_payments.chain_ladder
 #' @export
 chain_ladder_calendar <- function(x) {
   if (!inherits(x, "chain_ladder")) stop("`x` must be a chain_ladder object", call. = FALSE)
@@ -127,4 +153,15 @@ chain_ladder_calendar <- function(x) {
   fut <- !x$observed
   out <- tapply(x$incremental[fut], cal[fut], sum)
   c(out, total = sum(out))
+}
+
+#' @rdname as_triangle
+#' @param type For a [chain_ladder] object: the completed `"incremental"` (default) or
+#'   `"cumulative"` triangle.
+#' @export
+as_triangle.chain_ladder <- function(x, type = c("incremental", "cumulative"), ...) {
+  type <- match.arg(type)
+  M <- x[[type]]
+  attr(M, "cumulative") <- type == "cumulative"
+  M
 }

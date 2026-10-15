@@ -22,6 +22,12 @@ Every generated payment, past and future, for the claims in
 beyond the simulated horizon carried no amount and is dropped (the count is recorded in
 \code{data-raw/GENERATION.txt}).
 }
+\examples{
+data("synthetic_payments_full", package = "baggingReserve")
+# realised payments after the valuation date t = 12, by calendar year
+fut <- synthetic_payments_full[synthetic_payments_full$EventYear > 12, ]
+tapply(fut$Paid, fut$EventYear, sum)
+}
 \seealso{
 Other synthetic data:
 \code{\link{synthetic_claims}},

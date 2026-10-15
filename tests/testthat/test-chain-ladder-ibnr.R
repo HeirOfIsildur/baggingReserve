@@ -96,12 +96,17 @@ test_that("the 2023 division policy is reproduced: 0/0 is NaN and set to zero, x
   toy <- make_toy_portfolio()
   p <- claims_panel(toy$claims, toy$payments, t = 5, L = 4, features = "Type")
   pred <- predict(reserve_tree(p, seed = 1))
-  # factor for delay 2 is positive-over-zero (Inf) and multiplies a nonzero observed cell of AY 4
+  # factor for delay 2 is positive-over-zero (Inf) and multiplies a nonzero observed cell of AY 4;
+  # hand-made counts are refused against the stored triangle, so drop it (as in a prediction of an
+  # older version) to reach the projection
   cnt <- claim_counts(p); cnt[1:3, 2] <- 0; cnt[1:3, 3] <- 1; cnt[4, 2] <- 1
-  expect_error(ibnr_reserve(pred, cnt, projection = "incremental_ratio"), "infinite projected counts")
+  expect_error(ibnr_reserve(pred, cnt), "differs from the reporting counts")
+  pred_old <- pred; pred_old$counts <- NULL
+  expect_error(ibnr_reserve(pred_old, cnt, projection = "incremental_ratio"), "infinite projected counts")
   # counts from another valuation date or with other accident years are refused
   cl4 <- toy$claims[toy$claims$AccYear <= 4, ]
   pay4 <- toy$payments[toy$payments$Id %in% cl4$Id & toy$payments$EventYear <= 4, ]
   other <- claim_counts(claims_panel(cl4, pay4, t = 4, L = 4, features = "Type"))
   expect_error(ibnr_reserve(pred, other), "shape|observation masks|valuation date|accident years")
+  expect_error(ibnr_reserve(pred_old, other), "shape|observation masks|valuation date|accident years")
 })

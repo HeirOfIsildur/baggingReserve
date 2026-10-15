@@ -26,12 +26,11 @@ bag_reserve(
 \item{B}{Number of bootstrap replicates (a positive integer; default 100).}
 
 \item{seed}{Integer seed of the stream allocation. \code{NULL} draws one from the current
-generator and records it in the result. Because the caller's generator state is
-restored on exit, two calls with \code{seed = NULL} and nothing drawn in between use the
-same seed; give explicit seeds for distinct runs.}
+generator (advancing it, so that repeated calls differ) and records it in the result.}
 
 \item{ncores}{Number of worker processes (forked on Unix, a socket cluster elsewhere);
-default 1, which runs serially. Values below one count as one.}
+default 1, which runs serially. Values below one count as one; values above the
+number of cores detected are reduced to it, and the value used is recorded.}
 
 \item{control}{\code{\link[rpart:rpart.control]{rpart::rpart.control()}} for the bootstrap trees (default \code{cp = 0},
 \code{xval = 0}).}
@@ -51,7 +50,8 @@ the completed replicates.}
 
 \item{backend}{\code{"auto"} forks workers on Unix and uses a socket cluster elsewhere;
 \code{"fork"}, \code{"psock"} and \code{"serial"} force one backend. Results are the same for all of
-them (up to floating-point summation order in the OOB sums).}
+them (up to floating-point summation order in the OOB sums). Socket workers load the
+installed package, with a warning if its version differs from the one in use.}
 
 \item{object}{A \code{bag_reserve} fit (for \code{summary}).}
 
@@ -81,6 +81,11 @@ of the future payments: the numbers of unreported claims are projected once and 
 fixed and no payment noise is simulated.
 }
 \details{
+A factor level absent from the training claims of a development year gives a warning
+(see \code{\link[=predict.reserve_tree]{predict.reserve_tree()}}). A rare level can also be missing from the bootstrap
+sample of one replicate while present in the training claims; that replicate's tree
+then treats it as missing without a warning, which is part of the resampling variation.
+
 The out-of-bag (OOB) score of development year \code{l} uses, for each training claim, the
 trees of the replicates in which it was not sampled (its out-of-bag predictions, or
 "votes"), predicts its observed \verb{X_\{l+1\}} from its observed history, and compares:
@@ -94,7 +99,8 @@ Random numbers come from \code{"L'Ecuyer-CMRG"} streams allocated to (replicate,
 year) tasks, so the completed replicates do not depend on \code{ncores}, on the batching or on
 the scheduling of the workers under the same software; the out-of-bag sums are
 accumulated batch by batch and can differ in their last floating-point digits. The
-caller's generator state is restored on exit. Replicates are streamed: each worker fits
+caller's generator kind and state are restored on exit (after the one draw that makes the
+seed when \code{seed = NULL}). Replicates are streamed: each worker fits
 the trees of a replicate, records the OOB votes, aggregates the predicted future cells
 and discards the trees unless \code{keep_trees = TRUE}.
 }

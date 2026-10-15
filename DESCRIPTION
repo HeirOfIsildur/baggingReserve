@@ -1,6 +1,6 @@
 Package: baggingReserve
 Title: Bagging and Regression Trees for Individual Claims Reserving
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: c(
     person("Jan", "Janoušek", email = "janousek@karlin.mff.cuni.cz",
            role = c("aut", "cre"), comment = c(ORCID = "0009-0007-3731-4416")),

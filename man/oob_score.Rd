@@ -13,7 +13,7 @@ oob_score(object)
 A data frame with one row per development year and the columns \code{period} (the
 development-year index), \code{n_train}, \code{n_scored} (claims with at least one out-of-bag
 vote), \code{coverage}, \code{mean_votes} (mean number of votes among the covered claims),
-\code{oob_error}, \code{oob_score} and \code{response_var}.
+\code{oob_error}, \code{oob_score}, \code{response_var} and \code{oob_score_covered}.
 }
 \description{
 Extracts the out-of-bag errors, scores and coverage per development year from a bagged
@@ -26,8 +26,14 @@ errors over the covered claims divided by the total sum of squares of the respon
 \enc{Janoušek}{Janousek} and \enc{Pešta}{Pesta} 2025). With \code{B} replicates a claim is
 covered with probability \code{1 - (1 - (1 - 1/n)^n)^B} in expectation, close to one for \code{B}
 of a few dozen or more; the observed \code{coverage = n_scored / n_train} reports it, and the
-score is \code{NA} when no claim is covered or the response has zero variance. The score is
-a diagnostic of the one-year regressions, not a validation of the recursive multi-year
+score is \code{NA} when no claim is covered or the response has zero variance. Because its
+numerator runs over the covered claims only, the score is biased upwards when the
+coverage is below one (small \code{B}); \code{oob_score_covered} is the ordinary coefficient of
+determination over the covered claims, which does not have that bias. A negative score
+means that the out-of-bag predictions are worse than the mean of the response, which is
+common for unpruned bootstrap trees (\code{cp = 0}) on noisy late development years;
+a larger \code{minbucket} or a positive \code{cp} in \code{control} smooths them. The score is a
+diagnostic of the one-year regressions, not a validation of the recursive multi-year
 forecast or of the IBNR component.
 }
 \examples{
