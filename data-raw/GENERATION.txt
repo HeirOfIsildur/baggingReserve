@@ -1,0 +1,6 @@
+generated: 2026-09-19 09:49 CEST
+R version 4.6.1 (2026-06-24)
+SynthETIC 1.1.2
+generator: JSchelldorfer/IndividualClaimsSimulator @ 4991e882929a0e3f0bc10cc9dc00d7cedbf2a5cf (GPL-3)
+call: set_parameters(ref_claim = 1, time_unit = 1); years = 12; data.generation(seed = 2026, future_info = TRUE)
+payment events without an amount dropped from the full data: 1

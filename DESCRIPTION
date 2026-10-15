@@ -1,0 +1,40 @@
+Package: baggingReserve
+Title: Bagging and Regression Trees for Individual Claims Reserving
+Version: 0.1.0
+Authors@R: c(
+    person("Jan", "Janoušek", email = "janousek@karlin.mff.cuni.cz",
+           role = c("aut", "cre"), comment = c(ORCID = "0009-0007-3731-4416")),
+    person("Michal", "Pešta", email = "pesta@karlin.mff.cuni.cz", role = "aut",
+           comment = c(ORCID = "0000-0001-5311-0797")))
+Description: Individual (claim-by-claim) loss reserving in non-life insurance with
+    regression trees and bootstrap aggregating (bagging), as proposed by Janoušek
+    and Pešta (2025) <doi:10.1007/s00362-025-01715-9>. One regression tree is
+    calibrated per development year and the lower triangle of outstanding
+    payments of reported claims is filled recursively one development year ahead;
+    bagging yields replicate reserve predictions whose spread describes the
+    resampling variation of single-tree predictions, and the out-of-bag score
+    serves as a diagnostic of the one-year regressions. Payments for
+    incurred-but-not-reported claims are predicted from chain-ladder claim counts
+    and the average predicted payment per development year. Ships a reproducible
+    synthetic individual-claims dataset generated with 'SynthETIC'.
+License: GPL (>= 3)
+URL: https://github.com/HeirOfIsildur/baggingReserve
+BugReports: https://github.com/HeirOfIsildur/baggingReserve/issues
+Depends: R (>= 4.1)
+Imports:
+    graphics,
+    parallel,
+    rpart,
+    stats,
+    utils
+Suggests:
+    ChainLadder,
+    knitr,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+Encoding: UTF-8
+LazyData: true
+LazyDataCompression: xz
+Roxygen: list(markdown = TRUE)
+Config/roxygen2/version: 8.1.0
