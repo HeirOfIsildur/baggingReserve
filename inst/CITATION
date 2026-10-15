@@ -1,0 +1,15 @@
+citHeader("To cite the method, please cite the Statistical Papers article; to cite the software, the package:")
+
+bibentry(
+  bibtype = "Article",
+  title   = "Bagging and Regression Trees in Individual Claims Reserving",
+  author  = c(person("Jan", "Janoušek"), person("Michal", "Pešta")),
+  journal = "Statistical Papers",
+  year    = "2025",
+  volume  = "66",
+  number  = "4",
+  pages   = "89",
+  doi     = "10.1007/s00362-025-01715-9"
+)
+
+citation(auto = meta)

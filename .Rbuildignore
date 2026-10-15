@@ -1,0 +1,12 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^LICENSE\.md$
+^README\.Rmd$
+^\.github$
+^data-raw$
+^\.idea$
+^\.DS_Store$
+^cran-comments\.md$
+^\.git$
+^tests/testthat/_problems$
+^tests/testthat/testthat-problems\.rds$
