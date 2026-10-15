@@ -6,7 +6,7 @@
 \usage{
 chain_ladder(
   triangle,
-  input = c("incremental", "cumulative"),
+  input = NULL,
   projection = c("chain_ladder", "incremental_ratio")
 )
 }
@@ -14,8 +14,10 @@ chain_ladder(
 \item{triangle}{Numeric matrix with \code{NA} in the unobserved cells; each row must be
 observed in a leading block of columns. Typically \code{\link[=as_triangle]{as_triangle()}} output.}
 
-\item{input}{Whether \code{triangle} holds \code{"incremental"} (default) or \code{"cumulative"}
-amounts; this is not inferred from the triangle's attributes.}
+\item{input}{Whether \code{triangle} holds \code{"incremental"} or \code{"cumulative"} amounts. \code{NULL}
+(default) takes it from the triangle's \code{"cumulative"} attribute, which \code{\link[=as_triangle]{as_triangle()}}
+sets, and assumes incremental amounts when the attribute is absent. An explicit value
+that contradicts the attribute is an error.}
 
 \item{projection}{\code{"chain_ladder"} (default) or \code{"incremental_ratio"}, as described
 above.}

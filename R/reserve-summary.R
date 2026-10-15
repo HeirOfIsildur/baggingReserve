@@ -103,7 +103,9 @@ print.summary.reserve_prediction <- function(x, digits = 0L, ...) {
 #' @param id,acc_year,event_year,paid Column names, as in [claims_panel()].
 #' @param probs Two increasing probabilities in `[0, 1]` defining the replicate range shown.
 #' @param rep_year Name of the reporting-year column of `claims`, used for the population
-#'   check above when present; ignored otherwise.
+#'   checks above when present; ignored otherwise.
+#' @param type Quantile algorithm for the replicate range, as in [stats::quantile()]
+#'   (default 7, as in [summary.reserve_prediction()]).
 #' @return An object of class `"reserve_backtest"`: per component a data frame with one
 #'   row per future calendar year plus `total` (truth, predicted mean, error, relative
 #'   error, the replicate range and whether the truth lies inside it), the cell-level
@@ -124,7 +126,7 @@ print.summary.reserve_prediction <- function(x, digits = 0L, ...) {
 #' @export
 backtest <- function(pred, claims, payments, id = c(claims = "Id", payments = "Id"),
                      acc_year = "AccYear", event_year = "EventYear", paid = "Paid",
-                     probs = c(0.025, 0.975), rep_year = "RepYear") {
+                     probs = c(0.025, 0.975), rep_year = "RepYear", type = 7L) {
   if (!inherits(pred, "reserve_prediction")) stop("`pred` must be a reserve_prediction", call. = FALSE)
   check_probs_pair(probs)
   if (length(id) == 1L && is.null(names(id))) id <- c(claims = id, payments = id)
@@ -148,6 +150,15 @@ backtest <- function(pred, claims, payments, id = c(claims = "Id", payments = "I
            " but are absent from the prediction: the truth must describe the same portfolio as ",
            "the prediction (select it by the same criterion, not by the reported identifiers)", call. = FALSE)
   }
+  # the opposite mistake: a truth restricted to the reported claims has no IBNR claims at all,
+  # so the IBNR truth is zero and the total error looks small
+  late <- !cid %in% pred$claim_ids & ay %in% pred$accident_years
+  if (!is.null(rep_year) && rep_year %in% names(claims)) late <- late & ry > pred$t
+  if (!is.null(pred$ibnr) && sum(pred$ibnr) > 0 && !any(late, na.rm = TRUE))
+    warning("`claims` holds no claim reported after t = ", pred$t, " in the prediction's accident ",
+            "years, while the prediction projects IBNR payments: the realised IBNR payments are ",
+            "taken as zero. If the truth was selected by the reported claims' identifiers, select ",
+            "it by the criterion that defined the portfolio instead", call. = FALSE)
   pid <- payments[[id[["payments"]]]]
   ey <- as_integer_column(payments[[event_year]], event_year, allow_na = FALSE)
   amt <- payments[[paid]]
@@ -181,7 +192,7 @@ backtest <- function(pred, claims, payments, id = c(claims = "Id", payments = "I
     tr <- rowsum(tr_cells, group = factor(pred$cells$calendar, levels = years), reorder = TRUE)[, 1L]
     tr <- c(tr, total = sum(tr))
     mean_pred <- rowMeans(pr)
-    q <- t(apply(pr, 1L, stats::quantile, probs = probs, names = FALSE))
+    q <- t(apply(pr, 1L, stats::quantile, probs = probs, names = FALSE, type = type))
     if (nrow(pr) == 1L) q <- matrix(q, 1L)
     data.frame(calendar = rownames(pr), truth = unname(tr), predicted = unname(mean_pred),
                error = unname(mean_pred - tr),
@@ -195,7 +206,7 @@ backtest <- function(pred, claims, payments, id = c(claims = "Id", payments = "I
                  tail = list(n = sum(tail), amount = sum(amt[tail]),
                              max_dev = if (any(tail)) max(dev[tail]) else NA_integer_),
                  n_claims_future = length(unique(cid[m][keep])),
-                 B = pred$B, estimator = pred$estimator, probs = probs, t = t, L = L),
+                 B = pred$B, estimator = pred$estimator, probs = probs, type = type, t = t, L = L),
             class = "reserve_backtest")
 }
 

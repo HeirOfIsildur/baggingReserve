@@ -1,3 +1,53 @@
+# baggingReserve 0.1.1
+
+Changes after an independent software review of 0.1.0. The results of 0.1.0 are unchanged:
+fits with explicit seeds give identical predictions, replicates and IBNR components.
+
+## Guards against silent misuse
+
+* `ibnr_reserve()`: every prediction now stores the reporting-count triangle of its panel, and
+  `counts` defaults to it. Supplied counts must agree with the stored ones, so counts of
+  another portfolio, or cumulative counts stripped of their attribute, are an error instead
+  of a wrong IBNR component.
+* `chain_ladder()`: `input` now defaults to the triangle's `"cumulative"` attribute set by
+  `as_triangle()`; an explicit `input` that contradicts it is an error (a cumulative triangle
+  read as incremental gave a 26-fold outstanding).
+* `backtest()` warns when the truth holds no claim reported after `t` while IBNR payments are
+  predicted, the trace of a truth selected by the reported claims' identifiers.
+* `claims_panel()` keeps accident years without reported claims between the first and the
+  last one by default, and `ibnr_reserve()` warns about accident years without reported
+  claims, for which the chain ladder projects no IBNR claims. The documentation explains how
+  to include recent accident years that have no reported claim yet.
+* A factor level that is absent from the training claims of the development year in which a
+  claim is completed now gives a warning (`predict()`, `bag_reserve()`), as rpart treats it as
+  missing at each split on that feature.
+* `predict(newdata = )` refuses a logical feature where the fit had a numeric one.
+
+## Behaviour
+
+* `seed = NULL` in `reserve_tree()` and `bag_reserve()` now advances the caller's random
+  number stream, as any random draw in R, so repeated calls give different fits. Explicit
+  seeds still leave the caller's state untouched. `reserve_tree()` validates `seed`.
+* Stored trees (`keep_trees = TRUE`, and the trees of `reserve_tree()`) no longer keep rpart's
+  per-training-row `where` vector, and the bootstrap trees drop their complexity table:
+  about a third of the memory, with identical predictions.
+* `bag_reserve()` caps `ncores` at the number of cores detected and records the value used.
+* Errors for development years with fewer than two training claims state the eligibility
+  rule; fits report development years whose training response is constant.
+* `oob_score()` gains `oob_score_covered`, the coefficient of determination over the claims
+  with out-of-bag votes; the help page explains negative scores.
+* Socket workers warn when the installed package differs from the version in use.
+
+## Interface
+
+* `calendar_year_payments()` is generic, with a method for `chain_ladder` objects
+  (`chain_ladder_calendar()` remains); `as_triangle()` gains a `chain_ladder` method.
+* `as.data.frame()` methods for predictions and back-tests.
+* `backtest()` gains the quantile `type` argument.
+* `plot()` on a single-tree fit validates `period`; plots speak of development years.
+* Examples for the plot methods, `chain_ladder_calendar()` and the four datasets; the
+  prediction's `ibnr_details` and `counts` are documented.
+
 # baggingReserve 0.1.0
 
 First release, implementing the method of the source article, Janoušek & Pešta

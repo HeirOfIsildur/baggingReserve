@@ -17,7 +17,12 @@
 #' @param newdata `NULL` (default) completes the panel the model was fitted on. Otherwise
 #'   another [claims_panel] with the same features in the same order, the same `L`, and
 #'   factor levels among those seen at fitting time (a compatible subset is re-levelled;
-#'   unseen levels are an error).
+#'   levels unknown to the fit are an error). It may have another valuation date `t` than
+#'   the fitted panel: the trees then complete its cells after its own `t`. A factor level
+#'   that the fit knows but that is absent from the training claims of the period in which
+#'   a claim is completed gives a warning, here as when the fitted panel is completed: at
+#'   each split on that feature the trees treat it as missing (surrogate splits, else the
+#'   majority direction).
 #' @param type `"replicates"` returns every replicate; `"mean"` averages the completed
 #'   replicates (for a single-tree fit the two coincide).
 #' @param ... Unused.
@@ -29,7 +34,10 @@
 #'     (`acc_year + dev`), `index` (position in the triangle, column-major)}
 #'   \item{reported}{matrix, one row per future cell and one column per replicate, of
 #'     predicted payments of the reported claims}
-#'   \item{ibnr}{`NULL` until [ibnr_reserve()] adds the IBNR component}
+#'   \item{ibnr, ibnr_details}{`NULL` until [ibnr_reserve()] adds the IBNR component and
+#'     its details (projected counts, factors, pooled mean payments)}
+#'   \item{counts}{the incremental reporting-count triangle of the panel ([claim_counts()]),
+#'     used by [ibnr_reserve()] by default}
 #'   \item{claim_level}{for a single-tree fit only: the completed claim-level payment matrix}
 #'   \item{claim_ids, replicate_ids}{identifiers of the completed claims and of the columns}
 #'   \item{t, L, accident_years, B, estimator, provenance, call}{metadata; `estimator` is
@@ -56,6 +64,7 @@
 predict.reserve_tree <- function(object, newdata = NULL, type = c("replicates", "mean"), ...) {
   type <- match.arg(type)
   panel <- if (is.null(newdata)) object$panel else check_newdata(object, newdata)
+  warn_unseen_levels(panel, object$train_levels)
   P <- complete_payments(panel, object$fits, predict_period_rpart)
   cells <- future_cells(panel)
   reported <- matrix(aggregate_triangle(panel, P)[cells$index], ncol = 1L,
@@ -85,6 +94,11 @@ check_newdata <- function(object, newdata) {
       if (is.factor(x))
         stop("feature `", f, "` is a factor in `newdata` but was numeric or logical in the fit",
              call. = FALSE)
+      x_fit <- object$panel$claims[[f]]
+      if (!is.null(x_fit) && is.logical(x_fit) != is.logical(x))
+        stop("feature `", f, "` is ", if (is.logical(x)) "logical" else "numeric",
+             " in `newdata` but was ", if (is.logical(x_fit)) "logical" else "numeric",
+             " in the fit", call. = FALSE)
       next
     }
     if (!is.factor(x))
@@ -112,7 +126,7 @@ new_reserve_prediction <- function(panel, reported, estimator, claim_level = NUL
   replicate_ids <- colnames(reported)
   structure(list(
     observed = obs, cells = cells, reported = reported, ibnr = NULL,
-    claim_level = claim_level, claim_ids = panel$claims$id,
+    claim_level = claim_level, claim_ids = panel$claims$id, counts = claim_counts(panel),
     t = panel$t, L = panel$L, accident_years = panel$accident_years,
     B = ncol(reported), replicate_ids = replicate_ids,
     estimator = estimator, provenance = provenance, call = call),
@@ -170,7 +184,9 @@ component_matrix <- function(x, component) {
 #' diagonals of the run-off triangle: the first row is next year's payments, the last row
 #' the total of all future payments through development year `L`.
 #'
-#' @param x A [reserve_prediction].
+#' @param x A [reserve_prediction] (or a [chain_ladder] object, see
+#'   [calendar_year_payments.chain_ladder()]).
+#' @param ... Unused.
 #' @param component Component to aggregate; the default `"total"` sums reported-claim and
 #'   IBNR payments when an IBNR component is attached and otherwise uses the reported-claim
 #'   payments; `"ibnr"` requires [ibnr_reserve()] to have been applied.
@@ -187,8 +203,12 @@ component_matrix <- function(x, component) {
 #'       ibnr = calendar_year_payments(res, "ibnr")[, 1],
 #'       total = calendar_year_payments(res, "total")[, 1])
 #' @export
-calendar_year_payments <- function(x, component = c("total", "reported", "ibnr")) {
-  if (!inherits(x, "reserve_prediction")) stop("`x` must be a reserve_prediction", call. = FALSE)
+calendar_year_payments <- function(x, ...) UseMethod("calendar_year_payments")
+
+#' @rdname calendar_year_payments
+#' @export
+calendar_year_payments.reserve_prediction <- function(x, component = c("total", "reported", "ibnr"),
+                                                      ...) {
   component <- match.arg(component)
   if (component == "total" && is.null(x$ibnr)) component <- "reported"
   vals <- component_matrix(x, component)
@@ -197,5 +217,51 @@ calendar_year_payments <- function(x, component = c("total", "reported", "ibnr")
   out <- rbind(out, total = colSums(out))
   rownames(out) <- c(years, "total")
   attr(out, "component") <- component
+  out
+}
+
+#' @rdname calendar_year_payments
+#' @export
+calendar_year_payments.default <- function(x, ...) {
+  stop("`x` must be a reserve_prediction or a chain_ladder object", call. = FALSE)
+}
+
+#' Data frames of predictions and back-tests
+#'
+#' `as.data.frame()` on a [reserve_prediction] gives one row per future cell (accident
+#' year, development year, calendar year) with the mean over the replicates of the
+#' reported-claim payments and, when attached, of the IBNR component and the total. On a
+#' `reserve_backtest` it stacks the per-component tables of [backtest()] with a
+#' `component` column.
+#'
+#' @param x A [reserve_prediction] or a `reserve_backtest`.
+#' @param row.names,optional Unused, for compatibility with the generic.
+#' @param ... Unused.
+#' @return A data frame.
+#' @examples
+#' data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+#' cl <- synthetic_claims[synthetic_claims$Type == "3", ]
+#' pay <- synthetic_payments[synthetic_payments$Id %in% cl$Id, ]
+#' panel <- claims_panel(cl, pay, t = 12, L = 11, features = c("Age", "AccWeekday"))
+#' res <- ibnr_reserve(predict(reserve_tree(panel, seed = 1)))
+#' head(as.data.frame(res))
+#' @export
+as.data.frame.reserve_prediction <- function(x, row.names = NULL, optional = FALSE, ...) {
+  out <- x$cells[, c("acc_year", "dev", "calendar")]
+  out$reported <- rowMeans(x$reported)
+  if (!is.null(x$ibnr)) {
+    out$ibnr <- rowMeans(x$ibnr)
+    out$total <- out$reported + out$ibnr
+  }
+  rownames(out) <- NULL
+  out
+}
+
+#' @rdname as.data.frame.reserve_prediction
+#' @export
+as.data.frame.reserve_backtest <- function(x, row.names = NULL, optional = FALSE, ...) {
+  out <- do.call(rbind, lapply(names(x$tables), function(cmp)
+    cbind(component = cmp, x$tables[[cmp]], stringsAsFactors = FALSE)))
+  rownames(out) <- NULL
   out
 }

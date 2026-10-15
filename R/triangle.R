@@ -11,8 +11,8 @@
 #' for `"reported"` and `"total"` and are zero for `"ibnr"`, and no cell is `NA`.
 #' `claim_counts()` returns the incremental count triangle of a panel.
 #'
-#' @param x A [claims_panel] (for `claim_counts()` and the panel method) or a
-#'   [reserve_prediction]; for `print`, a triangle.
+#' @param x A [claims_panel] (for `claim_counts()` and the panel method), a
+#'   [reserve_prediction] or a [chain_ladder] object; for `print`, a triangle.
 #' @param what `"paid"` (default) or `"counts"`; panels only.
 #' @param cumulative Logical (default `FALSE`): cumulate along development (or reporting
 #'   delay) within each accident year; panels only.

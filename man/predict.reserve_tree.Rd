@@ -13,7 +13,12 @@
 \item{newdata}{\code{NULL} (default) completes the panel the model was fitted on. Otherwise
 another \link{claims_panel} with the same features in the same order, the same \code{L}, and
 factor levels among those seen at fitting time (a compatible subset is re-levelled;
-unseen levels are an error).}
+levels unknown to the fit are an error). It may have another valuation date \code{t} than
+the fitted panel: the trees then complete its cells after its own \code{t}. A factor level
+that the fit knows but that is absent from the training claims of the period in which
+a claim is completed gives a warning, here as when the fitted panel is completed: at
+each split on that feature the trees treat it as missing (surrogate splits, else the
+majority direction).}
 
 \item{type}{\code{"replicates"} returns every replicate; \code{"mean"} averages the completed
 replicates (for a single-tree fit the two coincide).}
@@ -29,7 +34,10 @@ after the valuation date}
 (\code{acc_year + dev}), \code{index} (position in the triangle, column-major)}
 \item{reported}{matrix, one row per future cell and one column per replicate, of
 predicted payments of the reported claims}
-\item{ibnr}{\code{NULL} until \code{\link[=ibnr_reserve]{ibnr_reserve()}} adds the IBNR component}
+\item{ibnr, ibnr_details}{\code{NULL} until \code{\link[=ibnr_reserve]{ibnr_reserve()}} adds the IBNR component and
+its details (projected counts, factors, pooled mean payments)}
+\item{counts}{the incremental reporting-count triangle of the panel (\code{\link[=claim_counts]{claim_counts()}}),
+used by \code{\link[=ibnr_reserve]{ibnr_reserve()}} by default}
 \item{claim_level}{for a single-tree fit only: the completed claim-level payment matrix}
 \item{claim_ids, replicate_ids}{identifiers of the completed claims and of the columns}
 \item{t, L, accident_years, B, estimator, provenance, call}{metadata; \code{estimator} is

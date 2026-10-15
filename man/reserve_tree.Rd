@@ -24,9 +24,9 @@ reserve_tree(
 cross-validated error (requires \code{xval > 0}); \code{"none"} keeps the full tree.}
 
 \item{seed}{Optional integer passed to \code{\link[=set.seed]{set.seed()}} before the first fit (the
-cross-validation folds are random). With \code{NULL} the current random number generator
-state is used and recorded; the caller's state is restored on exit, so two such calls
-with nothing drawn in between give the same folds.}
+cross-validation folds are random); the caller's generator state is then restored on
+exit. With \code{NULL} the current generator state is used, recorded in the result and
+advanced, as by any random draw in \R, so that repeated calls give different folds.}
 
 \item{object}{A \code{reserve_tree} fit (for \code{summary}).}
 

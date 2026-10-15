@@ -31,6 +31,11 @@ into the same year, negative amounts (recoveries) occur, and a few events carry 
 payment. Summing \code{Paid} per claim and year gives the incremental payments the method
 works with.
 }
+\examples{
+data("synthetic_payments", package = "baggingReserve")
+head(synthetic_payments)
+tapply(synthetic_payments$Paid, synthetic_payments$EventYear, sum)
+}
 \seealso{
 Other synthetic data:
 \code{\link{synthetic_claims}},

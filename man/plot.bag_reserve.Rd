@@ -17,3 +17,10 @@
 \description{
 Plot the out-of-bag scores of a bagged fit
 }
+\examples{
+data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+cl <- synthetic_claims[synthetic_claims$Type == "3", ]
+pay <- synthetic_payments[synthetic_payments$Id \%in\% cl$Id, ]
+panel <- claims_panel(cl, pay, t = 12, L = 11, features = c("Age", "AccWeekday"))
+plot(bag_reserve(panel, B = 5, seed = 2026))
+}

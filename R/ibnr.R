@@ -16,9 +16,12 @@
 #' The estimator assumes that the pooled payment per development year of the reported
 #' claims applies to the claims reported late; a payment pattern that depends on the
 #' reporting delay or a business mix that differs between early and late reporters
-#' invalidates it (see the JSS manuscript, Section 2.4). When no reported claim exists in a
-#' development year the mean is unidentified: the IBNR payments of that year are `NA` with
-#' a warning.
+#' invalidates it (see the JSS manuscript, Section 2.4).
+#'
+#' An accident year without any reported claim at the valuation date has an all-zero row in
+#' the count triangle, and the chain ladder projects no late-reported claims from it: such
+#' years get no IBNR payments, with a warning. Supply an external count projection, or fewer
+#' accident years, when this matters.
 #'
 #' With `projection = "incremental_ratio"` and `round = TRUE` the count projection uses
 #' the source article's incremental-ratio factors and rounding convention: undefined
@@ -30,8 +33,12 @@
 #'
 #' @param pred A [reserve_prediction] (from `predict()` on a fit). An existing IBNR
 #'   component is replaced.
-#' @param counts The *incremental* reporting-count triangle, [claim_counts()] of the same
-#'   panel: the same dimensions, observation mask, accident years and valuation date as
+#' @param counts The *incremental* reporting-count triangle of the panel the prediction was
+#'   made for. `NULL` (default) uses the triangle stored in the prediction
+#'   ([claim_counts()] of that panel). A supplied triangle must agree with the stored one in
+#'   its observed cells (it can only differ in how it is passed, e.g. without attributes);
+#'   for a prediction made by an older version of the package, which stores no counts, it
+#'   must have the same dimensions, observation mask, accident years and valuation date as
 #'   the prediction, with finite non-negative integer observed cells.
 #' @param projection Count projection, `"chain_ladder"` (default) or `"incremental_ratio"`;
 #'   see [chain_ladder()].
@@ -51,11 +58,18 @@
 #' res <- ibnr_reserve(predict(tree), claim_counts(panel))
 #' calendar_year_payments(res, "total")
 #' @export
-ibnr_reserve <- function(pred, counts, projection = c("chain_ladder", "incremental_ratio"),
+ibnr_reserve <- function(pred, counts = NULL, projection = c("chain_ladder", "incremental_ratio"),
                          round = FALSE) {
   if (!inherits(pred, "reserve_prediction"))
     stop("`pred` must be a reserve_prediction", call. = FALSE)
   projection <- match.arg(projection)
+  stored <- pred$counts
+  if (is.null(counts)) {
+    if (is.null(stored))
+      stop("the prediction stores no count triangle (made by an older version); ",
+           "supply `counts = claim_counts(panel)`", call. = FALSE)
+    counts <- stored
+  }
   if (isTRUE(attr(counts, "cumulative")))
     stop("`counts` must be the incremental count triangle (claim_counts(panel), not cumulative = TRUE)",
          call. = FALSE)
@@ -73,6 +87,16 @@ ibnr_reserve <- function(pred, counts, projection = c("chain_ladder", "increment
     stop("`counts` was built for another valuation date than the prediction", call. = FALSE)
   if (any(!is.finite(N[obs])) || any(N[obs] < 0) || any(N[obs] != round(N[obs])))
     stop("observed counts must be finite non-negative integers", call. = FALSE)
+  if (!is.null(stored) && !isTRUE(all.equal(unname(N[obs]), unname(as.matrix(stored)[obs]),
+                                            check.attributes = FALSE)))
+    stop("`counts` differs from the reporting counts of the panel the prediction was made for ",
+         "(another portfolio, or cumulative counts?); omit `counts` to use the stored triangle",
+         call. = FALSE)
+  empty <- rowSums(N * obs, na.rm = TRUE) == 0
+  if (any(empty))
+    warning("no reported claims in accident year(s) ",
+            paste(if (is.null(rownames(N))) which(empty) else rownames(N)[empty], collapse = ", "),
+            ": the chain ladder projects no IBNR claims for them", call. = FALSE)
 
   ## projected numbers of claims still to be reported, fixed across replicates ------------
   cl <- chain_ladder(N, input = "incremental", projection = projection)
@@ -103,23 +127,22 @@ ibnr_reserve <- function(pred, counts, projection = c("chain_ladder", "increment
   ibnr <- matrix(0, nrow(cells), B, dimnames = dimnames(pred$reported))
   base_tri <- pred$observed; base_tri[is.na(base_tri)] <- 0
   exposure <- colSums(U)
-  unidentified <- D == 0 & exposure > 0        # IBNR claims expected, no reported claim to learn from
+  # IBNR claims expected in a development year without any reported claim to learn the
+  # payment from. A fitted panel always has reported claims at delay 0 (period 0 needs
+  # training claims), so D is positive; guard against hand-made inputs.
+  if (any(D == 0 & exposure > 0))
+    stop("IBNR severity unidentified: no reported claims in development year(s) ",
+         paste(colnames(N)[D == 0 & exposure > 0], collapse = ", "), call. = FALSE)
   for (b in seq_len(B)) {
     R <- base_tri
     R[cells$index] <- pred$reported[, b]
     cs <- colSums(R)
     m <- cs / D
-    m[D == 0] <- 0                              # no reported claims: no pooled payment
-    m[unidentified] <- NA_real_
+    m[D == 0] <- 0                              # no reported claims and no exposure
     mu[b, ] <- m
     ib <- sweep(U, 2L, m, `*`)
     ibnr[, b] <- ib[cells$index]
   }
-  if (any(unidentified))
-    warning("IBNR severity unidentified (no reported claims) in development year(s) ",
-            paste(colnames(N)[unidentified], collapse = ", "), "; those cells are NA",
-            call. = FALSE)
-
   pred$ibnr <- ibnr
   pred$ibnr_details <- list(projection = projection, round = round, factors = cl$factors,
                             counts_projected = N_hat, counts_future_cumulative = U,

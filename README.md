@@ -8,7 +8,7 @@ R package implementing the reserving method of
 *Bagging and regression trees in individual claims reserving* (J. Janoušek and M. Pešta,
 Statistical Papers 66(4), 2025, [doi:10.1007/s00362-025-01715-9](https://doi.org/10.1007/s00362-025-01715-9)).
 
-Version 0.1.0. A manuscript describing the package is being prepared for the *Journal of
+Version 0.1.1 (0.1.0 is under review at CRAN). A manuscript describing the package is being prepared for the *Journal of
 Statistical Software*.
 
 ## What the method does

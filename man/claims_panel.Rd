@@ -60,7 +60,12 @@ order; factors keep their levels. The reporting delay is always a predictor and
 need not be listed. No feature is ever picked up automatically.}
 
 \item{accident_years}{Optional integer vector of accident years defining the rows of
-the aggregate triangles (default: the sorted accident years present).}
+the aggregate triangles. The default runs from the earliest to the latest accident
+year with a reported claim, gaps included. Accident years after the latest one are
+not added, because a portfolio in run-off has none; when recent accident years have no
+reported claim yet (a long-tail line), pass them, e.g. \code{accident_years = first:t}, so
+that their rows exist. The chain ladder projects no IBNR claims from an empty row, and
+\code{\link[=ibnr_reserve]{ibnr_reserve()}} warns about such years.}
 
 \item{na_features}{\code{"fail"} (default) refuses missing feature values; \code{"surrogate"}
 keeps them for \pkg{rpart}'s surrogate-split handling.}

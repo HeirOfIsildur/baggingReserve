@@ -36,7 +36,12 @@
 #'   order; factors keep their levels. The reporting delay is always a predictor and
 #'   need not be listed. No feature is ever picked up automatically.
 #' @param accident_years Optional integer vector of accident years defining the rows of
-#'   the aggregate triangles (default: the sorted accident years present).
+#'   the aggregate triangles. The default runs from the earliest to the latest accident
+#'   year with a reported claim, gaps included. Accident years after the latest one are
+#'   not added, because a portfolio in run-off has none; when recent accident years have no
+#'   reported claim yet (a long-tail line), pass them, e.g. `accident_years = first:t`, so
+#'   that their rows exist. The chain ladder projects no IBNR claims from an empty row, and
+#'   [ibnr_reserve()] warns about such years.
 #' @param na_features `"fail"` (default) refuses missing feature values; `"surrogate"`
 #'   keeps them for \pkg{rpart}'s surrogate-split handling.
 #' @param future_payments `"error"` (default) refuses payments dated after `t`;
@@ -196,7 +201,7 @@ claims_panel <- function(claims, payments, t, L,
   X[!obs] <- NA_real_
 
   if (is.null(accident_years)) {
-    accident_years <- sort(unique(ay[keep]))
+    accident_years <- seq.int(min(ay[keep]), max(ay[keep]))
   } else {
     accident_years <- sort(unique(as_integer_column(accident_years, "accident_years",
                                                     allow_na = FALSE)))
