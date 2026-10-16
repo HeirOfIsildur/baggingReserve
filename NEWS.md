@@ -40,6 +40,13 @@ fits with explicit seeds give identical predictions, replicates and IBNR compone
 
 ## Interface
 
+* `bag_reserve()` returns the claim-level reserve: the prediction's `claim_level` is the mean
+  over the replicates of the completed claim-by-development-year payment matrices
+  (`claim_level = TRUE`, the default; also for `predict(newdata = )`). The replicates are
+  unchanged.
+* `backtest()` gains `reference`, which scores another method's prediction, for example a
+  `chain_ladder()` fit, against the same realised payments.
+
 * `calendar_year_payments()` is generic, with a method for `chain_ladder` objects
   (`chain_ladder_calendar()` remains); `as_triangle()` gains a `chain_ladder` method.
 * `as.data.frame()` methods for predictions and back-tests.

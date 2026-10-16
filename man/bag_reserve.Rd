@@ -15,7 +15,8 @@ bag_reserve(
   oob = TRUE,
   keep_trees = FALSE,
   batch_size = NULL,
-  backend = c("auto", "fork", "psock", "serial")
+  backend = c("auto", "fork", "psock", "serial"),
+  claim_level = TRUE
 )
 
 \method{summary}{bag_reserve}(object, ...)
@@ -52,6 +53,10 @@ the completed replicates.}
 \code{"fork"}, \code{"psock"} and \code{"serial"} force one backend. Results are the same for all of
 them (up to floating-point summation order in the OOB sums). Socket workers load the
 installed package, with a warning if its version differs from the one in use.}
+
+\item{claim_level}{Return the claim-level reserve: the mean over the replicates of the
+completed claim-by-development-year payment matrices (default \code{TRUE}; component
+\code{claim_level} of the prediction). It costs one matrix of the panel's size per worker.}
 
 \item{object}{A \code{bag_reserve} fit (for \code{summary}).}
 

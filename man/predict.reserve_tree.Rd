@@ -38,7 +38,9 @@ predicted payments of the reported claims}
 its details (projected counts, factors, pooled mean payments)}
 \item{counts}{the incremental reporting-count triangle of the panel (\code{\link[=claim_counts]{claim_counts()}}),
 used by \code{\link[=ibnr_reserve]{ibnr_reserve()}} by default}
-\item{claim_level}{for a single-tree fit only: the completed claim-level payment matrix}
+\item{claim_level}{the completed claim-level payment matrix, one row per reported claim
+(columns \verb{X0, ..., XL}): for a single-tree fit its completion, for a bagged fit the mean
+of the completed replicates; observed cells keep their observed values}
 \item{claim_ids, replicate_ids}{identifiers of the completed claims and of the columns}
 \item{t, L, accident_years, B, estimator, provenance, call}{metadata; \code{estimator} is
 \code{"tree"}, \code{"bagging"} or \code{"bagging (mean of replicates)"}}

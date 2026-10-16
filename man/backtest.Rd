@@ -14,7 +14,8 @@ backtest(
   paid = "Paid",
   probs = c(0.025, 0.975),
   rep_year = "RepYear",
-  type = 7L
+  type = 7L,
+  reference = NULL
 )
 }
 \arguments{
@@ -31,6 +32,13 @@ checks above when present; ignored otherwise.}
 
 \item{type}{Quantile algorithm for the replicate range, as in \code{\link[stats:quantile]{stats::quantile()}}
 (default 7, as in \code{\link[=summary.reserve_prediction]{summary.reserve_prediction()}}).}
+
+\item{reference}{Optional prediction of another method for all claims, scored against the
+same truth: a \link{chain_ladder} object fitted on the same panel's triangle, or a named
+numeric vector of payments by future calendar year with a \code{total} element (as returned by
+\code{\link[=calendar_year_payments]{calendar_year_payments()}}). It adds the columns \code{reference}, \code{reference_error} and
+\code{reference_rel_error} to the table of all claims (component \code{"total"}, or \code{"reported"}
+for a prediction without IBNR component).}
 }
 \value{
 An object of class \code{"reserve_backtest"}: per component a data frame with one

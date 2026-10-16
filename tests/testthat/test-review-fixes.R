@@ -154,3 +154,42 @@ test_that("interface details: plot periods, ncores, OOB columns, data frames", {
   expect_setequal(unique(as.data.frame(bt)$component), c("reported", "ibnr", "total"))
   expect_error(calendar_year_payments(1:3), "reserve_prediction or a chain_ladder")
 })
+
+test_that("a bagged fit returns the claim-level mean of its completed replicates", {
+  f <- toy_fit()
+  bag <- bag_reserve(f$panel, B = 4, seed = 3, keep_trees = TRUE)
+  pr <- predict(bag)
+  P <- pr$claim_level
+  expect_equal(dim(P), dim(f$panel$payments))
+  # observed cells unchanged, future cells sum to the bagged mean of the reported component
+  obs <- !is.na(f$panel$payments)
+  expect_equal(P[obs], f$panel$payments[obs])
+  agg <- baggingReserve:::aggregate_triangle(f$panel, P)[pr$cells$index]
+  expect_equal(agg, rowMeans(pr$reported))
+  # identical replicates whether or not the claim-level mean is kept, and with newdata
+  expect_identical(predict(bag_reserve(f$panel, B = 4, seed = 3, claim_level = FALSE))$reported, pr$reported)
+  expect_null(predict(bag_reserve(f$panel, B = 4, seed = 3, claim_level = FALSE))$claim_level)
+  expect_equal(predict(bag, newdata = f$panel)$claim_level, P)
+  # forked workers give the same claim-level mean
+  skip_on_cran()
+  expect_equal(predict(bag_reserve(f$panel, B = 4, seed = 3, ncores = 2L, batch_size = 1L))$claim_level, P)
+})
+
+test_that("backtest() scores a reference prediction against the same truth", {
+  f <- toy_fit()
+  res <- ibnr_reserve(f$pred)
+  cl <- chain_ladder(as_triangle(f$panel))
+  bt <- backtest(res, f$toy$claims, f$toy$payments_full, reference = cl)
+  tot <- bt$tables$total
+  ref <- calendar_year_payments(cl)
+  expect_equal(tot$reference, unname(ref[tot$calendar]))
+  expect_equal(tot$reference_error, tot$reference - tot$truth)
+  expect_null(bt$tables$reported$reference)
+  expect_output(print(bt), "reference")
+  d <- as.data.frame(bt)
+  expect_true(all(is.na(d$reference[d$component != "total"])))
+  expect_error(backtest(res, f$toy$claims, f$toy$payments_full, reference = c(a = 1)), "calendar years")
+  # without the reference the back-test is unchanged
+  expect_identical(backtest(res, f$toy$claims, f$toy$payments_full)$tables$total,
+                   tot[setdiff(names(tot), c("reference", "reference_error", "reference_rel_error"))])
+})
