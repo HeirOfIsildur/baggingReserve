@@ -38,7 +38,9 @@
 #'     its details (projected counts, factors, pooled mean payments)}
 #'   \item{counts}{the incremental reporting-count triangle of the panel ([claim_counts()]),
 #'     used by [ibnr_reserve()] by default}
-#'   \item{claim_level}{for a single-tree fit only: the completed claim-level payment matrix}
+#'   \item{claim_level}{the completed claim-level payment matrix, one row per reported claim
+#'     (columns `X0, ..., XL`): for a single-tree fit its completion, for a bagged fit the mean
+#'     of the completed replicates; observed cells keep their observed values}
 #'   \item{claim_ids, replicate_ids}{identifiers of the completed claims and of the columns}
 #'   \item{t, L, accident_years, B, estimator, provenance, call}{metadata; `estimator` is
 #'     `"tree"`, `"bagging"` or `"bagging (mean of replicates)"`}
@@ -260,8 +262,12 @@ as.data.frame.reserve_prediction <- function(x, row.names = NULL, optional = FAL
 #' @rdname as.data.frame.reserve_prediction
 #' @export
 as.data.frame.reserve_backtest <- function(x, row.names = NULL, optional = FALSE, ...) {
-  out <- do.call(rbind, lapply(names(x$tables), function(cmp)
-    cbind(component = cmp, x$tables[[cmp]], stringsAsFactors = FALSE)))
+  cols <- unique(unlist(lapply(x$tables, names)))     # a reference adds columns to one table
+  out <- do.call(rbind, lapply(names(x$tables), function(cmp) {
+    tab <- x$tables[[cmp]]
+    for (k in setdiff(cols, names(tab))) tab[[k]] <- NA_real_
+    cbind(component = cmp, tab[cols], stringsAsFactors = FALSE)
+  }))
   rownames(out) <- NULL
   out
 }

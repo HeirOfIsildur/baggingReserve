@@ -26,8 +26,9 @@ replicates (for a single-tree fit the two coincide).}
 }
 \value{
 A \link{reserve_prediction} as documented in \code{\link[=predict.reserve_tree]{predict.reserve_tree()}}, with \code{B}
-columns of predicted reported-claim payments and no claim-level matrix
-(\code{claim_level = NULL}). With \code{type = "mean"} the object holds one column named
+columns of predicted reported-claim payments and, unless the fit was made with
+\code{claim_level = FALSE}, the claim-level matrix averaged over the replicates
+(\code{claim_level}; its future cells sum to the bagged mean of the reported component). With \code{type = "mean"} the object holds one column named
 \code{"mean"}, \code{B = 1} and the estimator label \code{"bagging (mean of replicates)"}; the
 replicate distribution is then no longer available.
 }

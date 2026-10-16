@@ -106,6 +106,12 @@ print.summary.reserve_prediction <- function(x, digits = 0L, ...) {
 #'   checks above when present; ignored otherwise.
 #' @param type Quantile algorithm for the replicate range, as in [stats::quantile()]
 #'   (default 7, as in [summary.reserve_prediction()]).
+#' @param reference Optional prediction of another method for all claims, scored against the
+#'   same truth: a [chain_ladder] object fitted on the same panel's triangle, or a named
+#'   numeric vector of payments by future calendar year with a `total` element (as returned by
+#'   [calendar_year_payments()]). It adds the columns `reference`, `reference_error` and
+#'   `reference_rel_error` to the table of all claims (component `"total"`, or `"reported"`
+#'   for a prediction without IBNR component).
 #' @return An object of class `"reserve_backtest"`: per component a data frame with one
 #'   row per future calendar year plus `total` (truth, predicted mean, error, relative
 #'   error, the replicate range and whether the truth lies inside it), the cell-level
@@ -126,7 +132,7 @@ print.summary.reserve_prediction <- function(x, digits = 0L, ...) {
 #' @export
 backtest <- function(pred, claims, payments, id = c(claims = "Id", payments = "Id"),
                      acc_year = "AccYear", event_year = "EventYear", paid = "Paid",
-                     probs = c(0.025, 0.975), rep_year = "RepYear", type = 7L) {
+                     probs = c(0.025, 0.975), rep_year = "RepYear", type = 7L, reference = NULL) {
   if (!inherits(pred, "reserve_prediction")) stop("`pred` must be a reserve_prediction", call. = FALSE)
   check_probs_pair(probs)
   if (length(id) == 1L && is.null(names(id))) id <- c(claims = id, payments = id)
@@ -202,6 +208,18 @@ backtest <- function(pred, claims, payments, id = c(claims = "Id", payments = "I
                stringsAsFactors = FALSE, row.names = NULL)
   })
   names(tables) <- comps
+  if (!is.null(reference)) {
+    ref <- if (inherits(reference, "chain_ladder")) calendar_year_payments(reference) else reference
+    cmp <- if ("total" %in% comps) "total" else "reported"
+    tab <- tables[[cmp]]
+    if (!is.numeric(ref) || is.null(names(ref)) || !all(tab$calendar %in% names(ref)))
+      stop("`reference` must be a chain_ladder object or a named numeric vector with the calendar years ",
+           paste(tab$calendar, collapse = ", "), call. = FALSE)
+    tab$reference <- unname(ref[tab$calendar])
+    tab$reference_error <- tab$reference - tab$truth
+    tab$reference_rel_error <- ifelse(tab$truth != 0, tab$reference_error / tab$truth, NA_real_)
+    tables[[cmp]] <- tab
+  }
   structure(list(tables = tables, truth_cells = truth,
                  tail = list(n = sum(tail), amount = sum(amt[tail]),
                              max_dev = if (any(tail)) max(dev[tail]) else NA_integer_),
@@ -231,6 +249,10 @@ print.reserve_backtest <- function(x, digits = 0L, ...) {
     if (x$B > 1L) {
       show$lower <- round(tab$lower, digits); show$upper <- round(tab$upper, digits)
       show$inside <- tab$inside_range
+    }
+    if (!is.null(tab$reference)) {
+      show$reference <- round(tab$reference, digits)
+      show$`ref_error_%` <- round(100 * tab$reference_rel_error, 1)
     }
     print(show, row.names = FALSE)
   }

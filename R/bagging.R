@@ -53,6 +53,9 @@
 #' @param batch_size Replicates processed per worker task before OOB votes are returned;
 #'   `NULL` (default) uses `max(1, ceiling(B / ncores / 2))`. The batching does not change
 #'   the completed replicates.
+#' @param claim_level Return the claim-level reserve: the mean over the replicates of the
+#'   completed claim-by-development-year payment matrices (default `TRUE`; component
+#'   `claim_level` of the prediction). It costs one matrix of the panel's size per worker.
 #' @param backend `"auto"` forks workers on Unix and uses a socket cluster elsewhere;
 #'   `"fork"`, `"psock"` and `"serial"` force one backend. Results are the same for all of
 #'   them (up to floating-point summation order in the OOB sums). Socket workers load the
@@ -80,7 +83,8 @@
 bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
                         control = rpart::rpart.control(cp = 0, xval = 0),
                         prune = c("none", "min_xerror"), oob = TRUE, keep_trees = FALSE,
-                        batch_size = NULL, backend = c("auto", "fork", "psock", "serial")) {
+                        batch_size = NULL, backend = c("auto", "fork", "psock", "serial"),
+                        claim_level = TRUE) {
   check_panel(panel)
   prune <- match.arg(prune)
   backend <- match.arg(backend)
@@ -110,6 +114,8 @@ bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
   warn_unseen_levels(panel, train_levels)
 
   run_batch <- function(bs) {
+    P_sum <- NULL                      # claim-level sum over the batch's completed replicates
+    if (claim_level) { P_sum <- panel$payments; P_sum[] <- 0 }
     oob_sum <- if (oob) lapply(n_train, function(n) numeric(n)) else NULL
     oob_cnt <- if (oob) lapply(n_train, function(n) integer(n)) else NULL
     reported <- matrix(NA_real_, nrow(cells), length(bs))
@@ -141,9 +147,11 @@ bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
       }
       P <- complete_payments(panel, models, predict_period_rpart)
       reported[, k] <- aggregate_triangle(panel, P)[cells$index]
+      if (claim_level) P_sum <- P_sum + P
       if (keep_trees) { trees[[k]] <- models; inbag[[k]] <- idx_b }
     }
-    list(reported = reported, oob_sum = oob_sum, oob_cnt = oob_cnt, trees = trees, inbag = inbag)
+    list(reported = reported, oob_sum = oob_sum, oob_cnt = oob_cnt, trees = trees, inbag = inbag,
+         P_sum = if (claim_level) P_sum else NULL)
   }
 
   if (is.null(batch_size)) batch_size <- max(1L, ceiling(B / max(ncores, 1L) / 2L))
@@ -170,7 +178,8 @@ bag_reserve <- function(panel, B = 100L, seed = NULL, ncores = 1L,
     inbag <- do.call(c, lapply(results, `[[`, "inbag"))
   }
 
-  prediction <- new_reserve_prediction(panel, reported, estimator = "bagging",
+  P_mean <- if (claim_level) Reduce(`+`, lapply(results, `[[`, "P_sum")) / B else NULL
+  prediction <- new_reserve_prediction(panel, reported, estimator = "bagging", claim_level = P_mean,
                                        provenance = list(B = B, seed = rng$info$seed,
                                                          rng = "L'Ecuyer-CMRG streams by replicate and period"))
   structure(list(
@@ -330,8 +339,9 @@ print.bag_reserve <- function(x, ...) {
 #' @inheritParams predict.reserve_tree
 #' @param object A [bag_reserve] fit.
 #' @return A [reserve_prediction] as documented in [predict.reserve_tree()], with `B`
-#'   columns of predicted reported-claim payments and no claim-level matrix
-#'   (`claim_level = NULL`). With `type = "mean"` the object holds one column named
+#'   columns of predicted reported-claim payments and, unless the fit was made with
+#'   `claim_level = FALSE`, the claim-level matrix averaged over the replicates
+#'   (`claim_level`; its future cells sum to the bagged mean of the reported component). With `type = "mean"` the object holds one column named
 #'   `"mean"`, `B = 1` and the estimator label `"bagging (mean of replicates)"`; the
 #'   replicate distribution is then no longer available.
 #' @examples
@@ -360,13 +370,15 @@ predict.bag_reserve <- function(object, newdata = NULL, type = c("replicates", "
     panel <- check_newdata(object, newdata)
     warn_unseen_levels(panel, object$train_levels)
     cells <- future_cells(panel)
+    P_sum <- panel$payments; P_sum[] <- 0
     reported <- vapply(object$trees, function(models) {
       P <- complete_payments(panel, models, predict_period_rpart)
+      P_sum <<- P_sum + P
       aggregate_triangle(panel, P)[cells$index]
     }, numeric(nrow(cells)))
     reported <- matrix(reported, nrow = nrow(cells), ncol = object$B,
                        dimnames = list(NULL, paste0("b", seq_len(object$B))))
-    pred <- new_reserve_prediction(panel, reported, estimator = "bagging",
+    pred <- new_reserve_prediction(panel, reported, estimator = "bagging", claim_level = P_sum / object$B,
                                    provenance = list(B = object$B, seed = object$rng$seed,
                                                      newdata = TRUE))
   }
