@@ -22,6 +22,9 @@ fits with explicit seeds give identical predictions, replicates and IBNR compone
   claim is completed now gives a warning (`predict()`, `bag_reserve()`), as rpart treats it as
   missing at each split on that feature.
 * `predict(newdata = )` refuses a logical feature where the fit had a numeric one.
+* `claims_panel()` warns when no payment is dated in year `t` (data extracted before the end
+  of year `t`); `backtest()` warns when the payments hold no transaction after `t` (a censored
+  truth); missing feature values are no longer reported as unseen factor levels.
 
 ## Behaviour
 

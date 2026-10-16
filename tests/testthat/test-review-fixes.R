@@ -193,3 +193,21 @@ test_that("backtest() scores a reference prediction against the same truth", {
   expect_identical(backtest(res, f$toy$claims, f$toy$payments_full)$tables$total,
                    tot[setdiff(names(tot), c("reference", "reference_error", "reference_rel_error"))])
 })
+
+test_that("silent traps of the second review now warn", {
+  toy <- make_toy_portfolio()
+  # a valuation date beyond the data
+  expect_warning(claims_panel(toy$claims[toy$claims$AccYear <= 4, ], toy$payments[toy$payments$EventYear <= 4 &
+                   toy$payments$Id %in% toy$claims$Id[toy$claims$AccYear <= 4], ], t = 5, L = 4, features = "Type"),
+                 "no payment of the reported claims is dated in year t = 5")
+  # a censored truth
+  f <- toy_fit()
+  res <- ibnr_reserve(f$pred)
+  expect_warning(backtest(res, f$toy$claims, f$toy$payments), "no transaction after t")
+  # missing feature values are not reported as unseen levels
+  cl <- toy$claims; cl$Grp <- factor(ifelse(cl$Type == "A", "a", "b")); cl$Grp[c(1, 5)] <- NA
+  p <- claims_panel(cl, toy$payments, t = 5, L = 4, features = c("Type", "Grp"), na_features = "surrogate")
+  w <- character()
+  withCallingHandlers(predict(reserve_tree(p, seed = 1)), warning = function(c) { w <<- c(w, conditionMessage(c)); invokeRestart("muffleWarning") })
+  expect_false(any(grepl("`Grp` = NA", w)))
+})

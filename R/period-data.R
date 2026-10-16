@@ -83,6 +83,7 @@ warn_unseen_levels <- function(panel, train_levels) {
     if (!length(rows)) next
     for (f in names(train_levels[[l + 1L]])) {
       lv <- setdiff(unique(as.character(panel$claims[[f]][rows])), train_levels[[l + 1L]][[f]])
+      lv <- lv[!is.na(lv)]               # a missing value is not a level (na_features = "surrogate")
       if (length(lv)) found <- c(found, sprintf("`%s` = %s in period %d", f,
                                                 paste(lv, collapse = "/"), l))
     }

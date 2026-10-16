@@ -173,6 +173,9 @@ backtest <- function(pred, claims, payments, id = c(claims = "Id", payments = "I
   amt <- as.double(amt)          # rowsum() keeps integer storage and could overflow otherwise
   m <- match(pid, cid)
   if (anyNA(m)) stop(sum(is.na(m)), " payment(s) refer to claims absent from `claims`", call. = FALSE)
+  if (!any(ey > pred$t))
+    warning("`payments` holds no transaction after t = ", pred$t, ": the realised future payments ",
+            "are taken as zero. Pass the payments that followed the valuation date", call. = FALSE)
   pay_ay <- ay[m]
   dev <- ey - pay_ay
   future <- ey > t & pay_ay %in% ays
