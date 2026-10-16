@@ -176,6 +176,11 @@ claims_panel <- function(claims, payments, t, L,
     dropped_future <- list(n = sum(after_t), amount = sum(amt[after_t]))
     pid <- pid[!after_t]; ey <- ey[!after_t]; amt <- amt[!after_t]
   }
+  # data extracted before the end of year t would turn the unobserved last diagonal into zeros
+  if (length(ey) && !any(ey == t))
+    warning("no payment of the reported claims is dated in year t = ", t, ": if the data end ",
+            "before year t, its cells are not observed zeros; choose t as the last complete year",
+            call. = FALSE)
   row <- match(pid, kept_ids)
   dev <- ey - ay[keep][row]
   if (any(dev < 0))
