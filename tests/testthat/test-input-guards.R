@@ -39,7 +39,8 @@ test_that("chain_ladder() reads the cumulative attribute and refuses a contradic
   # plain matrices: incremental unless stated
   expect_equal(chain_ladder(unclass(as_triangle(f$panel)))$outstanding_total, inc$outstanding_total)
   # the calendar-year method and the triangle extractor
-  expect_equal(calendar_year_payments(inc), chain_ladder_calendar(inc))
+  expect_warning(old <- chain_ladder_calendar(inc), "deprecated")
+  expect_equal(calendar_year_payments(inc), old)
   expect_equal(unname(as_triangle(inc, "cumulative")[, ncol(inc$cumulative)]), unname(inc$ultimate))
 })
 
@@ -48,8 +49,10 @@ test_that("backtest() warns when the truth has no claim reported after t", {
   res <- ibnr_reserve(f$pred)
   expect_gt(sum(res$ibnr), 0)
   reported_only <- f$toy$claims[f$toy$claims$Id %in% res$claim_ids, ]
+  # (observed_to states that the follow-up is complete, which the reported claims alone do not show)
   expect_warning(backtest(res, reported_only,
-                          f$toy$payments_full[f$toy$payments_full$Id %in% reported_only$Id, ]),
+                          f$toy$payments_full[f$toy$payments_full$Id %in% reported_only$Id, ],
+                          observed_to = 9),
                  "no claim reported after t")
   expect_no_warning(backtest(res, f$toy$claims, f$toy$payments_full))
   # the quantile type is an argument and is recorded
@@ -115,7 +118,10 @@ test_that("accident years: gaps are kept by default, empty rows warn in ibnr_res
   # a recent accident year without reported claims is kept when passed explicitly
   cl4 <- toy$claims[toy$claims$AccYear <= 4, ]
   pay4 <- toy$payments[toy$payments$Id %in% cl4$Id, ]
-  expect_equal(claims_panel(cl4, pay4, t = 5, L = 4, features = "Type")$accident_years, 1:4)
+  expect_warning(p4 <- claims_panel(cl4, pay4, t = 5, L = 4, features = "Type"),
+                 "latest accident year with a claim reported by t = 5 is 4: accident year\\(s\\) 5 have no row")
+  expect_equal(p4$accident_years, 1:4)
+  expect_no_warning(claims_panel(cl4, pay4, t = 5, L = 4, features = "Type", accident_years = 1:4))
   p5 <- claims_panel(cl4, pay4, t = 5, L = 4, features = "Type", accident_years = 1:5)
   expect_warning(ibnr_reserve(predict(reserve_tree(p5, seed = 1))), "accident year\\(s\\) 5")
 })
@@ -140,8 +146,9 @@ test_that("interface details: plot periods, ncores, OOB columns, data frames", {
   expect_error(plot(fit, period = 4), "between 0 and L - 1 = 3")
   expect_error(plot(fit, period = -1), "between 0 and L - 1")
   expect_invisible(plot(fit, period = 0))
-  bag <- bag_reserve(f$panel, B = 3, seed = 1, ncores = 10000L, backend = "serial")
-  expect_lte(bag$ncores, max(1L, parallel::detectCores(), na.rm = TRUE))
+  bag <- suppressMessages(bag_reserve(f$panel, B = 3, seed = 1, ncores = 10000L, backend = "serial"))
+  avail <- parallel::detectCores()
+  expect_equal(bag$ncores, if (is.na(avail)) 10000L else min(10000L, as.integer(avail)))
   o <- oob_score(bag)
   expect_true("oob_score_covered" %in% names(o))
   covered <- o$coverage == 1 & !is.na(o$oob_score)
@@ -198,7 +205,8 @@ test_that("silent traps of the second review now warn", {
   toy <- make_toy_portfolio()
   # a valuation date beyond the data
   expect_warning(claims_panel(toy$claims[toy$claims$AccYear <= 4, ], toy$payments[toy$payments$EventYear <= 4 &
-                   toy$payments$Id %in% toy$claims$Id[toy$claims$AccYear <= 4], ], t = 5, L = 4, features = "Type"),
+                   toy$payments$Id %in% toy$claims$Id[toy$claims$AccYear <= 4], ], t = 5, L = 4, features = "Type",
+                   accident_years = 1:4),
                  "no payment of the reported claims is dated in year t = 5")
   # a censored truth
   f <- toy_fit()
@@ -210,4 +218,69 @@ test_that("silent traps of the second review now warn", {
   w <- character()
   withCallingHandlers(predict(reserve_tree(p, seed = 1)), warning = function(c) { w <<- c(w, conditionMessage(c)); invokeRestart("muffleWarning") })
   expect_false(any(grepl("`Grp` = NA", w)))
+})
+
+test_that("bag_reserve() accepts another learner; the default is unchanged", {
+  f <- toy_fit()
+  lm_learner <- list(fit = function(formula, data) stats::lm(formula, data = data),
+                     predict = function(model, newdata) stats::predict(model, newdata = newdata))
+  bag_lm <- bag_reserve(f$panel, B = 3, seed = 4, learner = lm_learner, keep_trees = TRUE)
+  expect_s3_class(bag_lm$trees[[1]][[1]], "lm")
+  expect_equal(dim(predict(bag_lm)$reported), c(nrow(f$pred$cells), 3L))
+  expect_true(all(is.finite(oob_score(bag_lm)$oob_error)))
+  expect_equal(predict(bag_lm, newdata = f$panel)$reported, predict(bag_lm)$reported)
+  # the same seed gives the same bootstrap samples, so the default path is untouched
+  expect_identical(predict(bag_reserve(f$panel, B = 3, seed = 4))$reported,
+                   predict(bag_reserve(f$panel, B = 3, seed = 4, learner = NULL))$reported)
+  expect_error(bag_reserve(f$panel, B = 2, learner = list(fit = 1)), "learner")
+})
+
+test_that("reserve_tree() accepts another learner; the default is unchanged", {
+  f <- toy_fit()
+  lm_learner <- list(fit = function(formula, data) stats::lm(formula, data = data),
+                     predict = function(model, newdata) stats::predict(model, newdata = newdata))
+  fit_lm <- reserve_tree(f$panel, seed = 1, learner = lm_learner)
+  expect_s3_class(fit_lm$fits[[1]], "lm")
+  pr <- predict(fit_lm)
+  expect_equal(dim(pr$claim_level), dim(f$panel$payments))
+  expect_output(print(fit_lm), "user-supplied")
+  expect_true(all(is.na(summary(fit_lm)$periods$leaves)))
+  expect_equal(predict(fit_lm, newdata = f$panel)$reported, pr$reported)
+  grDevices::pdf(NULL); on.exit(grDevices::dev.off(), add = TRUE)
+  expect_error(plot(fit_lm), "another learner")
+  expect_identical(predict(reserve_tree(f$panel, seed = 1))$reported, f$pred$reported)
+})
+
+test_that("chain_ladder() and backtest(reference = ) refuse non-finite values", {
+  expect_error(chain_ladder(matrix(c(1, Inf, 2, 3), 2, byrow = TRUE)), "infinite observed cell")
+  expect_error(chain_ladder(matrix(c(1, -Inf, 2, NA), 2, byrow = TRUE)), "infinite observed cell")
+  expect_no_error(chain_ladder(matrix(c(1, 2, 2, NA), 2, byrow = TRUE)))   # NA marks the unobserved cell
+  toy <- make_toy_portfolio()
+  panel <- claims_panel(toy$claims, toy$payments, t = 5, L = 4, features = "Type")
+  res <- predict(reserve_tree(panel, seed = 1))
+  yrs <- as.character(sort(unique(res$cells$calendar)))
+  ref <- stats::setNames(rep(1, length(yrs)), yrs)
+  expect_no_error(backtest(res, toy$claims, toy$payments_full, reference = ref, reference_component = "reported"))
+  ref[1] <- Inf
+  expect_error(backtest(res, toy$claims, toy$payments_full, reference = ref, reference_component = "reported"),
+               "finite payments")
+})
+
+test_that("control and prune given together with a learner are ignored with a warning", {
+  toy <- make_toy_portfolio()
+  panel <- claims_panel(toy$claims, toy$payments, t = 5, L = 4, features = "Type")
+  lrn <- list(fit = function(formula, data) stats::lm(formula, data = data),
+              predict = function(model, newdata) stats::predict(model, newdata))
+  expect_warning(reserve_tree(panel, learner = lrn, prune = "min_xerror"), "`prune` applies to the default rpart")
+  expect_warning(bag_reserve(panel, B = 2, seed = 1, learner = lrn, control = rpart::rpart.control(cp = 0.5)),
+                 "`control` applies to the default rpart")
+  expect_warning(reserve_tree(panel, learner = lrn, control = rpart::rpart.control(), prune = "none"),
+                 "`control` and `prune` apply")
+  expect_no_warning(reserve_tree(panel, learner = lrn))
+})
+
+test_that("a date given as a year is refused with a hint at the conversion", {
+  claims <- data.frame(Id = 1:2, AccYear = as.Date(c("2001-03-01", "2002-05-01")), RepYear = c(2001, 2002))
+  payments <- data.frame(Id = 1:2, EventYear = c(2001, 2002), Paid = c(1, 2))
+  expect_error(claims_panel(claims, payments, t = 2002, L = 1), "holds dates.*as.integer\\(format\\(AccYear")
 })

@@ -54,6 +54,9 @@ chain_ladder <- function(triangle, input = NULL,
   if (!is.numeric(M) || ncol(M) < 2L)
     stop("`triangle` must be a numeric matrix with at least two columns", call. = FALSE)
   obs <- !is.na(M)
+  if (any(!is.finite(M[obs])))
+    stop("`triangle` has ", sum(!is.finite(M[obs])), " infinite observed cell(s); observed cells must be ",
+         "finite (NA marks the unobserved cells)", call. = FALSE)
   if (any(!obs[, 1L])) stop("every row must have at least its first cell observed", call. = FALSE)
   if (!all(apply(obs, 1L, function(o) all(diff(o) <= 0))))
     stop("every row of `triangle` must be observed in a leading block of columns", call. = FALSE)
@@ -127,13 +130,12 @@ print.chain_ladder <- function(x, digits = 4L, ...) {
 
 #' Future payments of a chain-ladder projection by calendar year
 #'
-#' `calendar_year_payments()` on a [chain_ladder] object, and its older name
-#' `chain_ladder_calendar()`, sum the projected incremental cells after the valuation date
-#' by calendar year (accident year plus development year).
+#' `calendar_year_payments()` on a [chain_ladder] object sums the projected incremental cells
+#' after the valuation date by calendar year (accident year plus development year).
 #'
 #' @param x A [chain_ladder] object whose columns are development years starting at 0 and
 #'   whose row names are the accident years.
-#' @param ... Unused.
+#' @param ... Not used; any argument given here is an error.
 #' @return Named vector of projected payments per future calendar year and a `total`.
 #' @examples
 #' data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
@@ -142,11 +144,26 @@ print.chain_ladder <- function(x, digits = 4L, ...) {
 #' panel <- claims_panel(cl, pay, t = 12, L = 11)
 #' calendar_year_payments(chain_ladder(as_triangle(panel)))
 #' @export
-calendar_year_payments.chain_ladder <- function(x, ...) chain_ladder_calendar(x)
+calendar_year_payments.chain_ladder <- function(x, ...) {
+  check_unused_dots(list(...), "calendar_year_payments",
+                    hints = c(component = "a chain ladder projects all claims; it has no components"))
+  cl_calendar(x)
+}
 
-#' @rdname calendar_year_payments.chain_ladder
+#' Deprecated: use calendar_year_payments()
+#'
+#' `chain_ladder_calendar()` was exported in version 0.1.1 and is deprecated; it returns
+#' `calendar_year_payments()` of the [chain_ladder] object, with a warning.
+#' @param x A [chain_ladder] object.
+#' @return As [calendar_year_payments.chain_ladder()].
+#' @keywords internal
 #' @export
 chain_ladder_calendar <- function(x) {
+  .Deprecated("calendar_year_payments", package = "baggingReserve")
+  cl_calendar(x)
+}
+
+cl_calendar <- function(x) {
   if (!inherits(x, "chain_ladder")) stop("`x` must be a chain_ladder object", call. = FALSE)
   ays <- as.integer(rownames(x$incremental)); devs <- as.integer(colnames(x$incremental))
   cal <- outer(ays, devs, `+`)
@@ -160,6 +177,7 @@ chain_ladder_calendar <- function(x) {
 #'   `"cumulative"` triangle.
 #' @export
 as_triangle.chain_ladder <- function(x, type = c("incremental", "cumulative"), ...) {
+  check_unused_dots(list(...), "as_triangle", "type")
   type <- match.arg(type)
   M <- x[[type]]
   attr(M, "cumulative") <- type == "cumulative"

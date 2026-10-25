@@ -2,26 +2,22 @@
 % Please edit documentation in R/chain-ladder.R
 \name{calendar_year_payments.chain_ladder}
 \alias{calendar_year_payments.chain_ladder}
-\alias{chain_ladder_calendar}
 \title{Future payments of a chain-ladder projection by calendar year}
 \usage{
 \method{calendar_year_payments}{chain_ladder}(x, ...)
-
-chain_ladder_calendar(x)
 }
 \arguments{
 \item{x}{A \link{chain_ladder} object whose columns are development years starting at 0 and
 whose row names are the accident years.}
 
-\item{...}{Unused.}
+\item{...}{Not used; any argument given here is an error.}
 }
 \value{
 Named vector of projected payments per future calendar year and a \code{total}.
 }
 \description{
-\code{calendar_year_payments()} on a \link{chain_ladder} object, and its older name
-\code{chain_ladder_calendar()}, sum the projected incremental cells after the valuation date
-by calendar year (accident year plus development year).
+\code{calendar_year_payments()} on a \link{chain_ladder} object sums the projected incremental cells
+after the valuation date by calendar year (accident year plus development year).
 }
 \examples{
 data("synthetic_claims", "synthetic_payments", package = "baggingReserve")

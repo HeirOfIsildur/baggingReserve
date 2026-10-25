@@ -24,8 +24,9 @@ squared error over the covered claims; \code{oob_score} is one minus the sum of 
 errors over the covered claims divided by the total sum of squares of the response over
 \emph{all} training claims of the development year (the definition of
 \enc{Janoušek}{Janousek} and \enc{Pešta}{Pesta} 2025). With \code{B} replicates a claim is
-covered with probability \code{1 - (1 - (1 - 1/n)^n)^B} in expectation, close to one for \code{B}
-of a few dozen or more; the observed \code{coverage = n_scored / n_train} reports it, and the
+covered with probability \code{1 - (1 - (1 - 1/n)^n)^B}, which is also the expected coverage:
+about 0.99 at \code{B = 10}, so that coverage is essentially complete for \code{B} in the hundreds but
+not for very small \code{B}; the observed \code{coverage = n_scored / n_train} reports it, and the
 score is \code{NA} when no claim is covered or the response has zero variance. Because its
 numerator runs over the covered claims only, the score is biased upwards when the
 coverage is below one (small \code{B}); \code{oob_score_covered} is the ordinary coefficient of

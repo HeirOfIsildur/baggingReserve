@@ -19,7 +19,7 @@ test_that("standard chain ladder on a hand-calculated triangle", {
   expect_equal(cl$incremental[!is.na(tri)], tri[!is.na(tri)])
   cum <- t(apply(tri, 1, function(r) { r[is.na(r)] <- 0; cumsum(r) })); cum[is.na(tri)] <- NA
   expect_equal(chain_ladder(cum, input = "cumulative")$cumulative, cl$cumulative)
-  cal <- chain_ladder_calendar(cl)
+  cal <- calendar_year_payments(cl)
   expect_equal(names(cal), c("4", "5", "total"))
   expect_equal(unname(cal["4"]), unname(cl$incremental[2, 3] + cl$incremental[3, 2]))
   expect_output(print(cl), "Development factors")

@@ -12,6 +12,7 @@
 
 The generator sources `./Tools/reopening.r` relative to the working directory, so the
 scripts call `data.generation()` from inside this folder. It is used only by
-`data-raw/make_synthetic_claims.R`, which regenerates the package datasets (and, in the
-manuscript's replication material, by the robustness study); it is not part of the installed package (`data-raw/` is in `.Rbuildignore`). The generator
+`data-raw/make_synthetic_claims.R`, which regenerates the package datasets, and by
+`paper/replication/robustness.R`, which generates the further portfolios of the manuscript's
+robustness study; it is not part of the installed package (`data-raw/` is in `.Rbuildignore`). The generator
 builds on the CRAN package SynthETIC (Avanzi, Taylor, Wang & Wong).

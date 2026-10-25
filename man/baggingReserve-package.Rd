@@ -6,30 +6,52 @@
 \alias{baggingReserve-package}
 \title{baggingReserve: Bagging and Regression Trees for Individual Claims Reserving}
 \description{
-Claim-by-claim loss reserving in non-life insurance with regression trees and
-bootstrap aggregating (bagging), following \enc{Janoušek}{Janousek} and \enc{Pešta}{Pesta} (2025).
+Software for claim-level (claim-by-claim) loss reserving in non-life insurance and for
+checking claim-level reserves against the payments that followed. It has three parts:
 }
 \details{
-The method works on a claim \eqn{\times} development-year panel. For every
-development year \eqn{l = 0, \dots, L-1} one regression tree is calibrated to
-predict the payment of the next development year, \eqn{X_{l+1}}, from the claim's
-static features (type, age of the insured, accident weekday, reporting delay) and its
-payment history \eqn{X_0, \dots, X_l}, using the claims reported by development year
-\eqn{l} whose payment in development year \eqn{l + 1} is observed at the valuation
-date. In the package's arguments, printed output and tables, the development-year
-index \eqn{l} of a tree is called its \code{period}. The lower triangle of outstanding
-payments of the reported claims (closed claims included; the status is not a feature
-of the source article's specification, but may be named as one) is then filled
-recursively, one development year ahead, feeding earlier predictions into later
-features. Bagging replaces each tree by a bootstrap ensemble: a replicate completes all
-histories with one bootstrap tree per development year, the point estimate is the
-bagged mean of the completed replicate predictions, and the replicate quantiles
-describe the variation of single-tree predictions under the resampling (they are
-neither prediction intervals for the payments nor confidence intervals for the bagged
-mean). An out-of-bag score per development year is a diagnostic of the one-year
-regressions. Payments for incurred-but-not-reported (IBNR) claims, the IBNR component,
-are predicted from chain-ladder claim counts and the average predicted payment per
-development year (Theorem 1 of the source article).
+\itemize{
+\item a \strong{data contract}: \code{\link[=claims_panel]{claims_panel()}} turns a table of claims and a table of payment
+transactions, with user-specified column names, into a claim \eqn{\times} development-year
+panel at a valuation date \code{t}. It enforces the valuation date on both tables, distinguishes
+observed zeros from future cells, keeps recoveries and claims without payments, and refuses
+input it cannot interpret;
+\item a \strong{recursion engine}, shared by the single-tree fit (\code{\link[=reserve_tree]{reserve_tree()}}), the bagged ensemble
+(\code{\link[=bag_reserve]{bag_reserve()}}) and user-supplied learners (argument \code{learner}, \code{\link[=two_part_learner]{two_part_learner()}}), that
+completes the payment history of every reported claim one development year ahead, either by
+plugging in predicted means (\code{completion = "mean"}) or by simulating the payments
+(\code{completion = "draw"}), with random-number streams that make bagged results independent of
+the number of worker processes; \code{\link[=ibnr_reserve]{ibnr_reserve()}} adds a component for the claims incurred but
+not reported (IBNR) from chain-ladder projections of the reporting counts;
+\item \strong{back-testing}: \code{\link[=backtest]{backtest()}} scores a prediction, and a reference method such as
+\code{\link[=chain_ladder]{chain_ladder()}}, against realised payments by calendar year and separately for the reported
+and the IBNR claims; valuing a claims history at an earlier date turns it into such a test.
+}
+
+The default estimator, a documented baseline that any learner can be measured against, is the
+method of \enc{Janoušek}{Janousek} and \enc{Pešta}{Pesta} (2025), the source article. For every
+development year \eqn{l = 0, \dots, L-1} one regression tree predicts the payment of the next
+development year, \eqn{X_{l+1}}, from the claim's static features, its reporting delay and its
+payment history \eqn{X_0, \dots, X_l}, using the claims reported by development year \eqn{l}
+whose payment in development year \eqn{l + 1} is observed at the valuation date. In the
+package's arguments, printed output and tables, the development-year index \eqn{l} of a tree
+is called its \code{period}. The lower triangle of outstanding payments of the reported claims
+(closed claims included; the status is not a feature of the source article's specification) is
+filled recursively, feeding earlier predictions into later features. Bagging replaces each tree
+by a bootstrap ensemble: a replicate completes all histories with one bootstrap tree per
+development year, the point estimate is the bagged mean of the completed replicates, and the
+replicate quantiles describe the variation of the bootstrap-tree predictions under the
+resampling (they are neither prediction intervals for the payments nor confidence intervals for
+the bagged mean). An out-of-bag score per development year is a diagnostic of the one-year
+regressions. The IBNR component is the projected number of late-reported claims times the
+average predicted payment per development year (Theorem 1 of the source article).
+
+The default \code{completion = "mean"} reproduces the source article. Plugging in means is biased
+for the payments after next year when the occurrence of a payment depends on the payment
+history, so for totals beyond next year we recommend \code{completion = "draw"} (see
+\code{\link[=bag_reserve]{bag_reserve()}}). On the portfolios studied in the JSS manuscript the standard chain ladder is
+more accurate than the default trees on most of them; the package is meant for finding out, with
+\code{\link[=backtest]{backtest()}}, whether claim-level information helps on a user's own data.
 
 The package ships a synthetic individual-claims portfolio generated with the simulator
 used in the source article (\link{synthetic_claims}, \link{synthetic_payments}; a fresh portfolio

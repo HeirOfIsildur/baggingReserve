@@ -15,7 +15,9 @@ backtest(
   probs = c(0.025, 0.975),
   rep_year = "RepYear",
   type = 7L,
-  reference = NULL
+  reference = NULL,
+  reference_component = c("total", "reported"),
+  observed_to = NULL
 )
 }
 \arguments{
@@ -23,28 +25,49 @@ backtest(
 
 \item{claims, payments}{Claims and payments tables with the columns named below.}
 
-\item{id, acc_year, event_year, paid}{Column names, as in \code{\link[=claims_panel]{claims_panel()}}.}
+\item{id, acc_year, event_year, paid}{Column names, as in \code{\link[=claims_panel]{claims_panel()}}; by default those the
+prediction's panel was built with (see the section on column names).}
 
 \item{probs}{Two increasing probabilities in \verb{[0, 1]} defining the replicate range shown.}
 
-\item{rep_year}{Name of the reporting-year column of \code{claims}, used for the population
-checks above when present; ignored otherwise.}
+\item{rep_year}{Name of the reporting-year column of \code{claims} (by default the one the panel was
+built with), used for the population and chronology checks above and the IBNR claim counts.
+When \code{claims} has no such column these are skipped with a warning; \code{rep_year = NULL} skips
+them silently.}
 
 \item{type}{Quantile algorithm for the replicate range, as in \code{\link[stats:quantile]{stats::quantile()}}
-(default 7, as in \code{\link[=summary.reserve_prediction]{summary.reserve_prediction()}}).}
+(an integer from 1 to 9; default 7, as in \code{\link[=summary.reserve_prediction]{summary.reserve_prediction()}}).}
 
-\item{reference}{Optional prediction of another method for all claims, scored against the
-same truth: a \link{chain_ladder} object fitted on the same panel's triangle, or a named
-numeric vector of payments by future calendar year with a \code{total} element (as returned by
-\code{\link[=calendar_year_payments]{calendar_year_payments()}}). It adds the columns \code{reference}, \code{reference_error} and
-\code{reference_rel_error} to the table of all claims (component \code{"total"}, or \code{"reported"}
-for a prediction without IBNR component).}
+\item{reference}{Optional prediction of another method, scored against the same truth (see
+the section on the reference): a \link{chain_ladder} object fitted on the paid triangle of the
+prediction's panel, or a named numeric vector of payments by future calendar year, with an
+optional \code{total} element (as returned by \code{\link[=calendar_year_payments]{calendar_year_payments()}}). It adds the columns
+\code{reference}, \code{reference_error} and \code{reference_rel_error} to the table of the component
+given by \code{reference_component}.}
+
+\item{reference_component}{The population the \code{reference} predicts: \code{"total"} (default; all
+claims) or \code{"reported"} (the claims reported by \code{t}; named vectors only).}
+
+\item{observed_to}{Last fully observed calendar year of \code{payments}, after the valuation date
+\code{t}; \code{NULL} (default) takes every calendar year of the prediction as observed. See the
+section on the follow-up.}
 }
 \value{
-An object of class \code{"reserve_backtest"}: per component a data frame with one
-row per future calendar year plus \code{total} (truth, predicted mean, error, relative
-error, the replicate range and whether the truth lies inside it), the cell-level
-truth matrices, and the excluded tail.
+An object of class \code{"reserve_backtest"}: a list with \code{tables}, per component a data
+frame with one row per future calendar year plus \code{total} (truth, predicted mean,
+\code{error = predicted - truth}, \code{rel_error = error / truth}, \code{NA} where the truth is zero; where
+the realised amount is negative, a calendar year of net recoveries, \code{rel_error} has the sign
+opposite to that of \code{error}, so an overprediction shows a negative relative error and \code{error}
+gives the direction; \code{reference_rel_error} is defined alike; then
+the replicate range \code{lower}, \code{upper} and whether the truth lies inside it,
+\code{inside_range}; the range columns are \code{NA} for a prediction with a single column, such as a
+single-tree fit, whose range is degenerate); the cell-level truth matrices (\code{truth_cells});
+the excluded tail (\code{tail}); \code{counts} (the IBNR claim counts described above, or \code{NULL});
+\code{total_years}, the calendar years summed in the \code{total} rows; \code{observed_to};
+\code{reference_component} (\code{NULL} without a reference); \code{not_scored}, the claims and the
+payments after \code{t} outside the prediction's accident years, the payments after
+\code{observed_to} and the claims set aside by \code{beyond_L = "drop"} with their payments after \code{t}
+(\code{n_claims_beyond_L}, \code{n_payments_beyond_L}, \code{amount_beyond_L}); the column names used (\code{columns}); and the settings.
 }
 \description{
 Compares the predicted future payments with the payments that actually followed,
@@ -54,8 +77,10 @@ valuation date (for the shipped data: \link{synthetic_claims_full} and
 were reported by the valuation date (those in the prediction) and the claims reported
 later (IBNR), and restricted to development years \verb{0, ..., L}; payments beyond \code{L} are
 reported separately as the excluded tail. The prediction's replicate range is shown
-next to the truth; it describes resampling variation, so "truth inside the range" is a
-descriptive statement, not a coverage probability.
+next to the truth; it describes the variability recorded in the prediction (resampling
+variation of bagged trees, simulated payments of one fitted model, or both; see
+\code{\link[=summary.reserve_prediction]{summary.reserve_prediction()}}), so "truth inside the range" is a descriptive statement, not a
+coverage probability.
 }
 \details{
 The truth tables must describe the same portfolio as the prediction, \emph{including} the
@@ -67,7 +92,71 @@ panel (all claims of a type, say), not by identifiers. When \code{claims} carrie
 year (\code{rep_year}), the function rejects claims absent from the prediction that were
 reported by the valuation date; it cannot detect IBNR claims that are missing from the
 truth tables altogether, so the completeness of the truth population remains the caller's
-responsibility.
+responsibility. The claims of the prediction must carry in \code{claims} the accident years and,
+when the reporting year is known, the reporting years they were predicted with (the reporting
+delay is a covariate of the fit); a contradiction is an error. (A prediction saved before the
+reporting delays were stored in it, \code{claim_rep_delays}, is only checked for a reporting year
+by \code{t}.) Claims whose accident year is not among the prediction's accident years
+(for example accident years after the valuation date), and their payments, are not scored;
+their numbers and amount are reported in \code{not_scored}. Claims that the panel set aside with
+\code{claims_panel(beyond_L = "drop")} (reported by \code{t} with a reporting delay above \code{L}, recorded in
+the prediction as \code{beyond_L_ids}) belong to the portfolio but not to the prediction: they are
+not counted as missing from it, and their payments after \code{t}, which all fall beyond development
+year \code{L}, are part of the excluded tail, also when their accident year lies outside the
+prediction's accident years (the panel's default range is determined after setting them aside);
+\code{not_scored} records their number and the number and amount of those payments, and does not count
+them among the claims outside the accident years.
+
+\strong{Chronology.} The truth is held to the data contract of \code{\link[=claims_panel]{claims_panel()}}: when \code{claims}
+carries the reporting year, a claim reported before its accident year, and a payment dated
+before the reporting year of its claim (which the model defines as zero, and which the
+constructor refuses), are errors naming an example; move such a payment to the reporting
+year, or correct the reporting year, as for the constructor. A claim of the prediction's
+accident years without a reporting year is treated, as by the constructor, as not reported by
+\code{t}: its payments after \code{t} count as IBNR truth, with a warning. Without a reporting-year column
+(see \code{rep_year}) none of these checks, nor the population checks above, can be made.
+
+\strong{Column names.} The defaults of \code{id}, \code{acc_year}, \code{event_year}, \code{paid} and \code{rep_year} are the
+column names of the input tables of the panel the prediction was made from (stored in the
+prediction as \code{mapping}), so that a portfolio with another layout is back-tested with the
+names given once to \code{\link[=claims_panel]{claims_panel()}}; a name passed here overrides it. The reporting year
+follows the rule of \code{\link[=claims_panel]{claims_panel()}}: when the panel was built from a reporting-delay column
+(\code{rep_delay}) and \code{claims} has that column, the reporting year is the accident year plus the
+delay, whether or not \code{claims} also has a reporting-year column, which must then agree with it
+wherever both are known; otherwise it is the reporting-year column. A \code{rep_year} passed
+explicitly is used instead. For a prediction without a mapping (made by an earlier
+version) the defaults are the names shown in the usage.
+
+\strong{Follow-up.} Every truth cell up to \code{observed_to} starts at zero and receives the payments
+dated in it, so a calendar year without any payment counts as a realised zero. By default
+(\code{observed_to = NULL}) the payments are taken to cover every calendar year of the prediction;
+if the extract ends earlier, pass the last fully observed calendar year as \code{observed_to}:
+the cells after it are unobserved (\code{NA} in \code{truth_cells}), their rows have \code{NA} truth, error
+and range check, and the \code{total} rows (truth, prediction, range and reference alike) sum the
+calendar years up to \code{observed_to} only (\code{total_years} of the result). The function does not
+infer the end of the follow-up from the data, because a fully observed year can have no
+payment; it warns when \code{observed_to} is \code{NULL} and the payments hold no transaction in the
+last calendar years of the prediction. Payments dated after \code{observed_to} are not scored.
+
+\strong{Reference.} A \code{reference} is scored against the truth of the population it predicts:
+\code{reference_component = "total"} (the default) for a prediction of all claims, such as a
+chain ladder on the panel's paid triangle, which needs a prediction with an IBNR component
+(attach it with \code{\link[=ibnr_reserve]{ibnr_reserve()}}); \code{"reported"} for a named vector predicting the payments of
+the reported claims only. A \link{chain_ladder} reference always predicts all claims, and it must
+have been fitted on the paid triangle of the prediction's panel: the same accident years,
+development years \verb{0, ..., L}, valuation date and observed payments (a chain ladder of
+another triangle can be passed as the named vector \code{\link[=calendar_year_payments]{calendar_year_payments()}} of it). A
+named vector must hold every future calendar year of the prediction and no other year, plus
+optionally a \code{total}, which must equal the sum over those years; the \code{total} row of the
+reference is that sum (over the observed years only when \code{observed_to} cuts the follow-up).
+
+\strong{IBNR claim counts.} When \code{pred} has an IBNR component and \code{claims} carries the reporting
+year, the result holds \code{counts}, the projected and the realised numbers of IBNR claims by
+accident year: projected, the chain-ladder count projection stored by \code{\link[=ibnr_reserve]{ibnr_reserve()}}
+(\code{ibnr_details$counts_projected}) summed over the cells after the valuation date; realised,
+the claims of \code{claims} absent from the prediction and reported after \code{t} with a reporting
+delay of at most \code{L} (and by \code{observed_to}, when given). The count error is a part of the
+IBNR error that the pooled mean payment does not explain.
 }
 \examples{
 data("synthetic_claims", "synthetic_payments", "synthetic_claims_full",
@@ -81,5 +170,8 @@ res <- ibnr_reserve(predict(reserve_tree(panel, seed = 1)), claim_counts(panel))
 # after the valuation date (selecting by the reported claims' identifiers would drop them)
 cl_full <- synthetic_claims_full[synthetic_claims_full$Type == "3", ]
 pay_full <- synthetic_payments_full[synthetic_payments_full$Id \%in\% cl_full$Id, ]
-backtest(res, cl_full, pay_full)
+backtest(res, cl_full, pay_full, reference = chain_ladder(as_triangle(panel)))
+# an extract that ends three years after the valuation date
+short <- pay_full[pay_full$EventYear <= 15, ]
+backtest(res, cl_full, short, observed_to = 15)$tables$total
 }

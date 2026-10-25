@@ -17,7 +17,8 @@
 #' @param cumulative Logical (default `FALSE`): cumulate along development (or reporting
 #'   delay) within each accident year; panels only.
 #' @param ... Passed on by the generic to its methods and by `print` to the matrix
-#'   printing method; unused otherwise.
+#'   printing method; in the methods, an argument that is not one of theirs (a misspelt one, say)
+#'   is an error.
 #' @return A numeric matrix of class `"reserve_triangle"` with the accident years as row
 #'   names and the development years (or reporting delays) `0, ..., L` as column names,
 #'   carrying the attributes `"t"`, `"what"` and `"cumulative"`. It is an ordinary matrix in
@@ -40,6 +41,7 @@ as_triangle <- function(x, ...) UseMethod("as_triangle")
 #' @rdname as_triangle
 #' @export
 as_triangle.claims_panel <- function(x, what = c("paid", "counts"), cumulative = FALSE, ...) {
+  check_unused_dots(list(...), "as_triangle", c("what", "cumulative"))
   what <- match.arg(what)
   ays <- x$accident_years
   L <- x$L

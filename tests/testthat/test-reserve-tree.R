@@ -139,3 +139,76 @@ test_that("surrogate handling: fits and predicts with missing feature values", {
   bag <- bag_reserve(p, B = 2, seed = 1)
   expect_false(anyNA(predict(bag)$reported))
 })
+
+test_that("simulated completion: leaf draws average near the plug-in, are reproducible, and need pools", {
+  toy <- make_toy_portfolio()
+  panel <- claims_panel(toy$claims, toy$payments, t = 5, L = 4, features = "Type")
+  fit <- reserve_tree(panel, seed = 1)
+  expect_length(fit$leaf_pools, 4L)
+  plug <- calendar_year_payments(predict(fit), "reported")
+  d1 <- predict(fit, completion = "draw", R = 30, seed = 9)
+  d2 <- predict(fit, completion = "draw", R = 30, seed = 9)
+  expect_identical(d1$reported, d2$reported)
+  expect_match(d1$estimator, "simulated completions")
+  # the first future step uses observed payments only, so its expectation equals the plug-in
+  drw <- calendar_year_payments(d1, "reported")
+  expect_equal(ncol(drw), 30L)                       # one column per simulated completion
+  expect_equal(unname(mean(drw[1, ])), unname(plug[1, 1]), tolerance = 0.1)
+  dm <- predict(fit, completion = "draw", R = 30, seed = 9, type = "mean")
+  expect_equal(unname(calendar_year_payments(dm, "reported")[, 1]), unname(rowMeans(drw)))
+  # observed cells are never changed
+  obs <- !is.na(panel$payments)
+  expect_equal(d1$claim_level[obs], fit$panel$payments[obs])
+  fit_old <- fit; fit_old$leaf_pools <- NULL
+  expect_error(predict(fit_old, completion = "draw"), "leaf responses")
+  expect_error(predict(fit, completion = "draw", R = 0), "at least 1")
+})
+
+test_that("two_part_learner fits occurrence and size, predicts p * s and simulates", {
+  toy <- make_toy_portfolio()
+  panel <- claims_panel(toy$claims, toy$payments, t = 5, L = 4, features = "Type")
+  logistic <- list(fit = function(formula, data) suppressWarnings(stats::glm(formula, data = data, family = stats::binomial())),
+                   predict = function(model, newdata) stats::predict(model, newdata, type = "response"))
+  linear <- list(fit = function(formula, data) stats::lm(formula, data = data),
+                 predict = function(model, newdata) stats::predict(model, newdata))
+  tp <- two_part_learner(logistic, linear)
+  expect_true(all(c("fit", "predict", "simulate") %in% names(tp)))
+  fit <- suppressWarnings(reserve_tree(panel, seed = 1, learner = tp))
+  m <- suppressWarnings(calendar_year_payments(predict(fit), "reported"))
+  s <- suppressWarnings(calendar_year_payments(predict(fit, completion = "draw", R = 5, seed = 2), "reported"))
+  expect_true(all(is.finite(m)) && all(is.finite(s)))
+  expect_error(predict(reserve_tree(panel, seed = 1, learner = linear), completion = "draw"), "simulate")
+  expect_error(two_part_learner(list(fit = 1), linear), "occurrence")
+})
+
+test_that("draws at an internal node use the training responses below it", {
+  pool <- list(`4` = 1, `10` = 2, `11` = 3, `3` = 4, `100000` = 5)
+  expect_equal(baggingReserve:::subtree_pool(pool, 5), c(2, 3))
+  expect_equal(baggingReserve:::subtree_pool(pool, 2), c(1, 2, 3))
+  expect_error(baggingReserve:::subtree_pool(pool, 7), "no training responses")
+})
+
+test_that("reserve_tree(seed = ) does not depend on the session's RNG kind and restores it", {
+  p <- claims_panel(make_toy_portfolio()$claims, make_toy_portfolio()$payments, t = 5, L = 4, features = "Type")
+  ref <- reserve_tree(p, seed = 1)
+  old <- RNGkind()
+  on.exit(do.call(RNGkind, as.list(old)), add = TRUE)
+  RNGkind("L'Ecuyer-CMRG", "Box-Muller")
+  set.seed(5); state <- .Random.seed
+  fit <- reserve_tree(p, seed = 1)
+  expect_identical(fit$cp_chosen, ref$cp_chosen)
+  expect_identical(predict(fit)$reported, predict(ref)$reported)
+  # the three kinds the package pins; newer R versions also report a binomial kind as a fourth element
+  expect_identical(fit$rng$kind[1:3], c("Mersenne-Twister", "Inversion", "Rejection"))
+  expect_identical(RNGkind()[1:3], c("L'Ecuyer-CMRG", "Box-Muller", old[3L]))
+  expect_identical(.Random.seed, state)
+  # simulated completions too
+  d1 <- predict(fit, completion = "draw", R = 3, seed = 9)$reported
+  do.call(RNGkind, as.list(old))
+  expect_identical(predict(ref, completion = "draw", R = 3, seed = 9)$reported, d1)
+  # seed = NULL uses the session's generator as it is
+  RNGkind("L'Ecuyer-CMRG"); set.seed(2)
+  a <- reserve_tree(p)
+  expect_identical(a$rng$kind[1L], "L'Ecuyer-CMRG")
+  expect_false(identical(.Random.seed, a$rng$state))
+})

@@ -16,7 +16,8 @@ calendar_year_payments(x, ...)
 \item{x}{A \link{reserve_prediction} (or a \link{chain_ladder} object, see
 \code{\link[=calendar_year_payments.chain_ladder]{calendar_year_payments.chain_ladder()}}).}
 
-\item{...}{Unused.}
+\item{...}{Not used; an argument given here is an error (for a \link{chain_ladder} object, which
+has a single component, any argument is).}
 
 \item{component}{Component to aggregate; the default \code{"total"} sums reported-claim and
 IBNR payments when an IBNR component is attached and otherwise uses the reported-claim

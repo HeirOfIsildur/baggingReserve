@@ -5,7 +5,15 @@
 \alias{reserve_prediction}
 \title{Predicted future payments of the reported claims}
 \usage{
-\method{predict}{reserve_tree}(object, newdata = NULL, type = c("replicates", "mean"), ...)
+\method{predict}{reserve_tree}(
+  object,
+  newdata = NULL,
+  type = c("replicates", "mean"),
+  completion = c("mean", "draw"),
+  R = 100L,
+  seed = NULL,
+  ...
+)
 }
 \arguments{
 \item{object}{A fitted \link{reserve_tree}.}
@@ -14,7 +22,12 @@
 another \link{claims_panel} with the same features in the same order, the same \code{L}, and
 factor levels among those seen at fitting time (a compatible subset is re-levelled;
 levels unknown to the fit are an error). It may have another valuation date \code{t} than
-the fitted panel: the trees then complete its cells after its own \code{t}. A factor level
+the fitted panel: the trees then complete its cells after its own \code{t}, and the prediction is
+labelled by that \code{t} (its first calendar year is \code{t + 1} of \code{newdata}). A panel valued before
+the fit's valuation date that shares claims with the fitted panel gives a warning: the trees
+were trained on those claims' payments after its valuation date, so a back-test of the
+prediction would use information that was not available then; refit at the earlier date
+instead (Section 4.3 of the JSS manuscript). A factor level
 that the fit knows but that is absent from the training claims of the period in which
 a claim is completed gives a warning, here as when the fitted panel is completed: at
 each split on that feature the trees treat it as missing (surrogate splits, else the
@@ -23,7 +36,31 @@ majority direction).}
 \item{type}{\code{"replicates"} returns every replicate; \code{"mean"} averages the completed
 replicates (for a single-tree fit the two coincide).}
 
-\item{...}{Unused.}
+\item{completion}{\code{"mean"} (default, the source article's method) plugs the predicted mean of
+each development year into the payment history used for the next, as described above.
+\code{"draw"} simulates instead: each future payment is a training response drawn from the
+claim's leaf (for a user-supplied learner, from its \code{simulate(model, newdata)} function). The
+\code{R} simulated completions are the columns of the result (process variability of the fitted
+trees, no estimation variability); \code{type = "mean"} averages them. Because most later-year
+payments are exactly zero, plugging in means can move claims across splits that separate
+paying from non-paying claims; simulation avoids this. (For a bagged fit the completion is
+chosen in \code{\link[=bag_reserve]{bag_reserve()}}.)
+Plugging in means is biased for payments beyond next year when the occurrence of a payment
+depends on the payment history: in the correctly specified simulation of the JSS manuscript
+(Section 4.6) it overstated the total reserve of the reported claims by up to 62\% for the
+single tree, a bias that does not vanish as the portfolio grows. Simulated completion removes
+this mechanism and most of the bias (at most 0.8\% remained there for the single tree; the
+fitted model's own errors remain). Next year's payments are the same in expectation.
+\strong{For totals beyond next year we recommend \code{"draw"}.}}
+
+\item{R}{Number of simulated completions for \code{completion = "draw"} (default 100).}
+
+\item{seed}{Seed for the simulated completions, set with R's default generator kinds as in
+\code{\link[=reserve_tree]{reserve_tree()}} (the caller's kind and state are restored on exit); \code{NULL} (default) uses
+and advances the current random-number state. \code{R} and \code{seed} belong to
+\code{completion = "draw"}: given with \code{completion = "mean"}, they are an error.}
+
+\item{...}{Not used; any argument given here (a misspelt one, say) is an error.}
 }
 \value{
 An object of class \code{"reserve_prediction"}, a list with
@@ -40,10 +77,36 @@ its details (projected counts, factors, pooled mean payments)}
 used by \code{\link[=ibnr_reserve]{ibnr_reserve()}} by default}
 \item{claim_level}{the completed claim-level payment matrix, one row per reported claim
 (columns \verb{X0, ..., XL}): for a single-tree fit its completion, for a bagged fit the mean
-of the completed replicates; observed cells keep their observed values}
+of the completed replicates; observed cells keep their observed values. Its future cells add
+up to the reported-claim prediction, but they are not a reliable allocation of that reserve
+between the claims: every reported claim is completed, open or closed, and the trees do not
+know the settlement status, so on the shipped portfolio a third of the reserve falls on
+claims already closed while the open claims are underpredicted (supplementary material of the
+JSS manuscript, Section S5). See \code{\link[=claim_reserves]{claim_reserves()}}; for case-level allocation a model with a
+settlement layer, such as \pkg{hirem}, is needed.}
 \item{claim_ids, replicate_ids}{identifiers of the completed claims and of the columns}
-\item{t, L, accident_years, B, estimator, provenance, call}{metadata; \code{estimator} is
-\code{"tree"}, \code{"bagging"} or \code{"bagging (mean of replicates)"}}
+\item{claim_acc_years, claim_rep_delays}{the accident year and reporting delay of every
+completed claim, which \code{\link[=backtest]{backtest()}} checks against its truth tables}
+\item{mapping, beyond_L_ids}{the column names of the panel's input tables, which \code{\link[=backtest]{backtest()}}
+uses as its defaults, and the claims the panel set aside with \code{beyond_L = "drop"}}
+\item{t, L, accident_years, B, estimator, call}{metadata; \code{estimator} is \code{"tree"},
+\code{"tree (R simulated completions)"}, \code{"bagging"} or \code{"bagging (simulated completion)"}, with
+\code{" (mean of replicates)"} (bagging) or \code{"tree (mean of R simulated completions)"} after
+\code{type = "mean"}}
+\item{completion, variability}{the completion mode (\code{"mean"} or \code{"draw"}) and the sources of
+variability among the columns: none for a single-tree fit with \code{completion = "mean"};
+\code{"simulated payments"} for the \code{R} simulated completions of one fitted model (process
+variability given the fitted model, no estimation variability); \code{"bootstrap resampling"} for
+the replicates of \code{\link[=bag_reserve]{bag_reserve()}}; both for a bagged fit with \code{completion = "draw"}, whose
+replicate \code{b} is one completion simulated from the \code{b}-th set of bootstrap trees (its
+estimation part is the variation of one set of unpruned bootstrap trees, with the samples
+drawn per development year, not that of the bagged mean). The \code{print()}, \code{summary()},
+\code{plot()} and \code{\link[=backtest]{backtest()}} methods describe the columns accordingly. In no case do the
+columns contain the uncertainty of the IBNR claim counts or of the model itself.}
+\item{provenance}{the fitting settings, the fitting random-number information (\code{rng}), the
+package versions, the \code{completion} and, for simulated completion, \code{R} and the random-number
+information of the simulation (\code{completion_rng}: its \code{seed}, or with \code{seed = NULL} the
+generator state the draws started from)}
 }
 }
 \description{
@@ -53,7 +116,11 @@ development year \code{l} predicts \verb{X_\{l+1\}} from the features, the repor
 \verb{X_0, ..., X_l}, where the cells after the valuation date among \verb{X_0, ..., X_l} are
 the predictions of the earlier trees. Following the source article, every reported
 claim is completed, including claims recorded as closed; the claim status is not a
-covariate unless it is named in \code{features}.
+covariate unless it is named in \code{features}. Do not name a status recorded at the valuation
+date as a feature without care: the panel holds it as a static feature, but in the earlier
+development years from which the trees learn it was not yet known (a claim closed at \code{t}
+was open in the years in which it paid), so the trees learn from information that the
+claims did not have at the time (see the JSS manuscript on open and closed claims).
 }
 \details{
 The result is a \code{reserve_prediction}: the observed incremental triangle, the

@@ -163,3 +163,55 @@ test_that("backends agree: serial, forked and socket workers", {
   expect_equal(predict(psock)$reported, predict(serial)$reported)
   expect_equal(oob_score(psock)$n_scored, oob_score(serial)$n_scored)
 })
+
+test_that("bag_reserve(completion = 'draw') simulates per replicate, reproducibly and batch-invariantly", {
+  toy <- make_toy_portfolio()
+  panel <- claims_panel(toy$claims, toy$payments, t = 5, L = 4, features = "Type")
+  m <- bag_reserve(panel, B = 6, seed = 11)
+  d1 <- bag_reserve(panel, B = 6, seed = 11, completion = "draw")
+  d2 <- bag_reserve(panel, B = 6, seed = 11, completion = "draw", batch_size = 2)
+  expect_identical(d1$prediction$reported, d2$prediction$reported)
+  expect_identical(d1$oob, m$oob)                     # same trees as completion = "mean"
+  expect_match(d1$prediction$estimator, "simulated completion")
+  expect_false(identical(d1$prediction$reported, m$prediction$reported))
+  # the first future step uses observed payments only: its mean is close to the plug-in
+  expect_equal(mean(calendar_year_payments(d1$prediction, "reported")[1, ]),
+               mean(calendar_year_payments(m$prediction, "reported")[1, ]), tolerance = 0.15)
+  expect_error(predict(bag_reserve(panel, B = 2, seed = 1, completion = "draw", keep_trees = TRUE),
+                       newdata = panel), "completion = \"mean\"")
+  lm_learner <- list(fit = function(formula, data) stats::lm(formula, data = data),
+                     predict = function(model, newdata) stats::predict(model, newdata))
+  expect_error(bag_reserve(panel, B = 2, completion = "draw", learner = lm_learner), "simulate")
+})
+
+test_that("socket workers run a learner that refers to global variables, helpers and packages", {
+  skip_on_cran()
+  skip_if_not(requireNamespace("baggingReserve", quietly = TRUE) &&
+                "baggingReserve" %in% rownames(utils::installed.packages()),
+              "socket workers need the installed package")
+  # a learner written at top level: its functions' environment is the global environment, which
+  # socket workers do not share; the minimum leaf size and a helper function live there
+  ge <- globalenv()
+  assign("br_test_minbucket", 30, envir = ge)
+  assign("br_test_fit", function(formula, data)
+    rpart::rpart(formula, data = data, method = "anova",
+                 control = rpart::rpart.control(cp = 0, xval = 0, minbucket = br_test_minbucket)), envir = ge)
+  environment(ge$br_test_fit) <- ge
+  on.exit(rm(list = c("br_test_minbucket", "br_test_fit"), envir = ge), add = TRUE)
+  lrn <- list(fit = function(formula, data) br_test_fit(formula, data),
+              predict = function(model, newdata) unname(stats::predict(model, newdata)))
+  environment(lrn$fit) <- ge; environment(lrn$predict) <- ge
+  g <- learner_globals(lrn)
+  expect_setequal(names(g$variables), c("br_test_fit", "br_test_minbucket"))
+  serial <- bag_reserve(toy_panel, B = 4, seed = 5, learner = lrn, backend = "serial")
+  psock <- bag_reserve(toy_panel, B = 4, seed = 5, learner = lrn, ncores = 2, backend = "psock")
+  expect_identical(predict(psock)$reported, predict(serial)$reported)
+  expect_equal(oob_score(psock)$oob_score, oob_score(serial)$oob_score)
+  # an object reached by name only cannot be detected: the failure says what to do
+  lrn_get <- list(fit = function(formula, data) get("br_test_fit")(formula, data), predict = lrn$predict)
+  environment(lrn_get$fit) <- ge
+  expect_identical(predict(bag_reserve(toy_panel, B = 2, seed = 5, learner = lrn_get, backend = "serial"))$reported,
+                   predict(bag_reserve(toy_panel, B = 2, seed = 5, learner = lrn, backend = "serial"))$reported)
+  expect_error(bag_reserve(toy_panel, B = 2, seed = 5, learner = lrn_get, ncores = 2, backend = "psock"),
+               "separate R sessions")
+})

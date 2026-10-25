@@ -57,8 +57,23 @@ invalidates it (see the JSS manuscript, Section 2.4).
 
 An accident year without any reported claim at the valuation date has an all-zero row in
 the count triangle, and the chain ladder projects no late-reported claims from it: such
-years get no IBNR payments, with a warning. Supply an external count projection, or fewer
-accident years, when this matters.
+years get no IBNR payments, with a warning. The function has no argument for an external
+count projection; when this matters, estimate the IBNR payments of such years outside the
+package (for example, as in the formula above, externally projected numbers of late
+claims with delay \verb{<= l} times the pooled mean payments \code{ibnr_details$mu}), or leave those
+accident years out of the panel (argument \code{accident_years} of \code{\link[=claims_panel]{claims_panel()}}).
+
+In the last development years \eqn{\hat\mu_l} rests on little information: only the oldest
+accident years are observed there, and the other accident years contribute the predictions of
+the late trees, which are trained on those few accident years. A few recoveries can then make
+\eqn{\hat\mu_l} negative in every replicate (on the claims of type 2 of the shipped portfolio,
+for example, \eqn{\hat\mu_L} is negative, and so is the IBNR payment of calendar year 23);
+inspect \code{ibnr_details$mu}, and \code{ibnr_details$divisor}, the reported claims behind it, before
+relying on the late cells.
+
+The projected numbers of claims are the same in every replicate, so the spread of the IBNR
+component over the replicates comes from the pooled mean payments \eqn{\hat\mu_l} only; it
+contains no uncertainty of the count projection.
 
 With \code{projection = "incremental_ratio"} and \code{round = TRUE} the count projection uses
 the source article's incremental-ratio factors and rounding convention: undefined

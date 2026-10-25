@@ -16,7 +16,9 @@ bag_reserve(
   keep_trees = FALSE,
   batch_size = NULL,
   backend = c("auto", "fork", "psock", "serial"),
-  claim_level = TRUE
+  claim_level = TRUE,
+  learner = NULL,
+  completion = c("mean", "draw")
 )
 
 \method{summary}{bag_reserve}(object, ...)
@@ -29,21 +31,24 @@ bag_reserve(
 \item{seed}{Integer seed of the stream allocation. \code{NULL} draws one from the current
 generator (advancing it, so that repeated calls differ) and records it in the result.}
 
-\item{ncores}{Number of worker processes (forked on Unix, a socket cluster elsewhere);
-default 1, which runs serially. Values below one count as one; values above the
-number of cores detected are reduced to it, and the value used is recorded.}
+\item{ncores}{Number of worker processes (forked on Unix, a socket cluster elsewhere), a
+positive integer; default 1, which runs serially. Values above the number of cores detected
+are reduced to it, with a message; when \code{\link[parallel:detectCores]{parallel::detectCores()}} cannot determine that
+number (it returns \code{NA} in some containers), the value is used as given. The value used is
+recorded (\code{ncores} of the result) and printed.}
 
 \item{control}{\code{\link[rpart:rpart.control]{rpart::rpart.control()}} for the bootstrap trees (default \code{cp = 0},
 \code{xval = 0}).}
 
-\item{prune}{\code{"none"} (default) or \code{"min_xerror"} (needs \code{xval > 0} in \code{control}).}
+\item{prune}{\code{"none"} (default) or \code{"min_xerror"} (needs cross-validation, \code{xval >= 2} in
+\code{control}, and is an error otherwise). Ignored, and not checked, with a user-supplied \code{learner}.}
 
 \item{oob}{Compute the out-of-bag diagnostics (default \code{TRUE}; with \code{FALSE} the \code{oob}
 element of the result is \code{NULL} and \code{\link[=oob_score]{oob_score()}} fails).}
 
 \item{keep_trees}{Keep the \code{B * L} fitted trees (and the bootstrap indices) in the
-result (default \code{FALSE}), which allows \code{predict(..., newdata = )} and inspection at a
-large memory cost.}
+result (default \code{FALSE}), which allows \code{predict(..., newdata = )} (for
+\code{completion = "mean"} only) and inspection at a large memory cost.}
 
 \item{batch_size}{Replicates processed per worker task before OOB votes are returned;
 \code{NULL} (default) uses \code{max(1, ceiling(B / ncores / 2))}. The batching does not change
@@ -52,11 +57,46 @@ the completed replicates.}
 \item{backend}{\code{"auto"} forks workers on Unix and uses a socket cluster elsewhere;
 \code{"fork"}, \code{"psock"} and \code{"serial"} force one backend. Results are the same for all of
 them (up to floating-point summation order in the OOB sums). Socket workers load the
-installed package, with a warning if its version differs from the one in use.}
+installed package; a version different from the one in use is an error. They are fresh R
+sessions, so for a user-supplied \code{learner} they are given the variables of the global
+environment that its functions refer to (found with \code{\link[codetools:findGlobals]{codetools::findGlobals()}}, also inside
+the functions among them) and the attached packages those functions use; an object a learner
+reaches otherwise (through \code{\link[=get]{get()}}, a character string, a formula's environment) must be
+created inside its functions or carried in their environment, as \code{\link[=two_part_learner]{two_part_learner()}} does,
+and a failure on the workers says so.}
 
 \item{claim_level}{Return the claim-level reserve: the mean over the replicates of the
 completed claim-by-development-year payment matrices (default \code{TRUE}; component
 \code{claim_level} of the prediction). It costs one matrix of the panel's size per worker.}
+
+\item{learner}{\code{NULL} (default) grows \pkg{rpart} trees as described above. Otherwise a list
+with functions \code{fit(formula, data)}, returning a model for one development year from its
+bootstrap sample, and \code{predict(model, newdata)}, returning numeric predictions; the
+bootstrap, the recursion, the out-of-bag diagnostic and the random-number streams are those
+of the package. \code{control} and \code{prune} apply only to the default learner (given with a
+\code{learner}, they are ignored with a warning and not validated; the fit records \code{prune = "none"}),
+as in \code{\link[=reserve_tree]{reserve_tree()}}. Every prediction of
+a learner (out-of-bag votes, plugged-in and simulated completion) is checked: a numeric vector
+with one finite value per row of \code{newdata}; see \code{\link[=reserve_tree]{reserve_tree()}} and \code{\link[=two_part_learner]{two_part_learner()}}.}
+
+\item{completion}{\code{"mean"} (default, the source article's method) completes each replicate by
+plugging in its predicted means; \code{"draw"} simulates each replicate's completion once, drawing
+every future payment from the training responses of the claim's leaf in that replicate's tree
+(for a user-supplied learner, from its \code{simulate()}), on a separate random-number substream,
+so the trees are those of \code{"mean"}. The replicate spread then adds the process variability of
+one simulated completion to the resampling variation of one set of bootstrap trees (see
+Details for what it still leaves out). For bagged fits the completion is chosen here, when
+fitting; \code{\link[=predict.bag_reserve]{predict.bag_reserve()}} has no \code{completion} argument (unlike
+\code{\link[=predict.reserve_tree]{predict.reserve_tree()}}) and refuses one that differs from the fit's; a fit with \code{"draw"}
+cannot predict \code{newdata} (the leaf responses of its trees are not kept).
+Plugging in means is biased for payments beyond next year when the occurrence of a payment
+depends on the payment history: in the correctly specified simulation of the JSS manuscript
+(Section 4.6) it overstated the total reserve of the reported claims by up to 54\% for the
+bagged mean, a bias that does not vanish as the portfolio grows. Simulated completion removes
+this mechanism and most of the bias; what remained there was at most 1.7\% for the bagged mean,
+whose unpruned bootstrap trees also overpredict next year's payments by about 1\%. Next year's
+payments are the same in expectation under both completions. \strong{For totals beyond next year
+we recommend \code{"draw"}.}}
 
 \item{object}{A \code{bag_reserve} fit (for \code{summary}).}
 
@@ -81,11 +121,30 @@ cross-validation). Replicate \code{b} then completes the payment histories of al
 claims with its \code{L} trees, one per development year, recursively one development year
 ahead. The \code{B} completed replicates are the output: the point estimate is the bagged
 mean of the completed replicate predictions, and their spread describes the variation
-of single-tree predictions under this resampling. It is not a predictive distribution
+under this resampling of the predictions of one set of bootstrap trees (unpruned by
+default, unlike the pruned trees of \code{\link[=reserve_tree]{reserve_tree()}}). It is not a predictive distribution
 of the future payments: the numbers of unreported claims are projected once and held
-fixed and no payment noise is simulated.
+fixed, and with the default \code{completion = "mean"} no payment noise is simulated. With
+\code{completion = "draw"} each replicate is completed once by payments simulated from its own
+trees, so its spread adds process variability to this resampling variation. It is still not a
+predictive distribution: the estimation part is the variation of one set of (unpruned)
+bootstrap trees, a noisier estimator than the bagged mean that is reported; the bootstrap
+samples are drawn independently for each development year, not once per claim, so they do
+not reproduce how the errors of successive trees are linked through the same claims; and the
+IBNR counts stay fixed. The prediction records which case applies (\code{variability}), and its
+\code{print()}, \code{summary()}, \code{plot()} and \code{\link[=backtest]{backtest()}} output says so.
 }
 \details{
+\strong{Completion.} The default \code{completion = "mean"} is the source article's method, kept so
+that the package reproduces it. For totals beyond next year we recommend
+\code{completion = "draw"}: plugging in means is biased for the later years when the occurrence of
+a payment depends on the payment history (see the argument \code{completion}).
+
+The default \code{B = 100} suffices for the bagged mean: its Monte Carlo standard error is the
+replicate standard deviation divided by \code{sqrt(B)}, small against the errors back-tests
+measure. Extreme replicate quantiles and complete out-of-bag coverage need more; the JSS
+manuscript uses \code{B = 1000}.
+
 A factor level absent from the training claims of a development year gives a warning
 (see \code{\link[=predict.reserve_tree]{predict.reserve_tree()}}). A rare level can also be missing from the bootstrap
 sample of one replicate while present in the training claims; that replicate's tree
@@ -119,6 +178,14 @@ bag <- bag_reserve(panel, B = 5, seed = 2001)
 bag
 oob_score(bag)
 calendar_year_payments(predict(bag), "reported")
+# simulated completion, recommended for totals beyond next year
+bag_draw <- bag_reserve(panel, B = 5, seed = 2001, completion = "draw")
+calendar_year_payments(predict(bag_draw), "reported")[c(1, 11), ]
+# another learner for the one-year regressions, here a linear model
+lm_learner <- list(fit = function(formula, data) lm(formula, data = data),
+                   predict = function(model, newdata) predict(model, newdata = newdata))
+bag_lm <- bag_reserve(panel, B = 5, seed = 2001, learner = lm_learner)
+calendar_year_payments(predict(bag_lm), "reported")[c(1, 11), ]
 }
 \seealso{
 \code{\link[=predict.bag_reserve]{predict.bag_reserve()}}, \code{\link[=oob_score]{oob_score()}}, \code{\link[=ibnr_reserve]{ibnr_reserve()}}

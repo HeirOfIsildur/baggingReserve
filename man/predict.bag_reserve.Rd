@@ -13,7 +13,12 @@
 another \link{claims_panel} with the same features in the same order, the same \code{L}, and
 factor levels among those seen at fitting time (a compatible subset is re-levelled;
 levels unknown to the fit are an error). It may have another valuation date \code{t} than
-the fitted panel: the trees then complete its cells after its own \code{t}. A factor level
+the fitted panel: the trees then complete its cells after its own \code{t}, and the prediction is
+labelled by that \code{t} (its first calendar year is \code{t + 1} of \code{newdata}). A panel valued before
+the fit's valuation date that shares claims with the fitted panel gives a warning: the trees
+were trained on those claims' payments after its valuation date, so a back-test of the
+prediction would use information that was not available then; refit at the earlier date
+instead (Section 4.3 of the JSS manuscript). A factor level
 that the fit knows but that is absent from the training claims of the period in which
 a claim is completed gives a warning, here as when the fitted panel is completed: at
 each split on that feature the trees treat it as missing (surrogate splits, else the
@@ -22,7 +27,8 @@ majority direction).}
 \item{type}{\code{"replicates"} returns every replicate; \code{"mean"} averages the completed
 replicates (for a single-tree fit the two coincide).}
 
-\item{...}{Unused.}
+\item{...}{Only \code{completion}, equal to the fit's (\code{object$completion}); anything else is an
+error.}
 }
 \value{
 A \link{reserve_prediction} as documented in \code{\link[=predict.reserve_tree]{predict.reserve_tree()}}, with \code{B}
@@ -38,8 +44,15 @@ portfolio or for compatible new data. Without \code{newdata}, the \link{reserve_
 cached at fitting time is returned: one column per bootstrap replicate
 (\code{type = "replicates"}) or their mean (\code{type = "mean"}, which averages the \emph{completed}
 replicates, never the trees development year by development year). With \code{newdata}, the
-stored trees complete another \link{claims_panel}; this needs \code{keep_trees = TRUE} at fitting
-time.
+stored trees complete another \link{claims_panel}; this needs \code{keep_trees = TRUE} and
+\code{completion = "mean"} at fitting time (a fit with \code{completion = "draw"} does not keep the leaf
+responses its simulation draws from, so it predicts only the fitted portfolio).
+}
+\details{
+The completion (plugged-in means or simulated payments) of a bagged fit is chosen when fitting,
+with \code{bag_reserve(completion = )}, not here: \code{completion} is accepted only when it restates the
+fit's own choice, and any other argument (\code{R}, \code{seed}, a misspelt \code{type}) is an error, so that
+no call silently returns another estimator than the one asked for.
 }
 \examples{
 data("synthetic_claims", "synthetic_payments", package = "baggingReserve")

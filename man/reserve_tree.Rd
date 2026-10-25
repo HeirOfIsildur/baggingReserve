@@ -9,7 +9,8 @@ reserve_tree(
   panel,
   control = rpart::rpart.control(cp = 0, xval = 10),
   prune = c("min_xerror", "none"),
-  seed = NULL
+  seed = NULL,
+  learner = NULL
 )
 
 \method{summary}{reserve_tree}(object, ...)
@@ -20,17 +21,32 @@ reserve_tree(
 \item{control}{An \code{\link[rpart:rpart.control]{rpart::rpart.control()}} object; the default is \code{cp = 0} with
 \code{xval = 10}.}
 
-\item{prune}{\code{"min_xerror"} (default) prunes at the first minimum of the
-cross-validated error (requires \code{xval > 0}); \code{"none"} keeps the full tree.}
+\item{prune}{\code{"min_xerror"} (default) prunes at the smallest cross-validated error
+(\code{xerror} of the complexity table; the simplest tree on ties; requires cross-validation,
+\code{xval >= 2} in \code{control}, and is an error otherwise);
+\code{"none"} keeps the full tree.}
 
-\item{seed}{Optional integer passed to \code{\link[=set.seed]{set.seed()}} before the first fit (the
-cross-validation folds are random); the caller's generator state is then restored on
-exit. With \code{NULL} the current generator state is used, recorded in the result and
-advanced, as by any random draw in \R, so that repeated calls give different folds.}
+\item{seed}{Optional integer seed for the cross-validation folds, which are random. It is
+set with \code{set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")}, R's default generator, so that the fit does not depend on the
+session's \code{\link[=RNGkind]{RNGkind()}}; the caller's generator kind and state are restored on exit. With
+\code{NULL} the current generator (of whatever kind) is used, its state recorded in the result
+and advanced, as by any random draw in \R, so that repeated calls give different folds.
+(The stream allocation of \code{\link[=bag_reserve]{bag_reserve()}} does not apply to single-tree fits.)}
+
+\item{learner}{\code{NULL} (default) fits pruned \pkg{rpart} trees as described above. Otherwise a
+list with functions \code{fit(formula, data)} and \code{predict(model, newdata)} that replaces them
+for every development year (see \code{\link[=bag_reserve]{bag_reserve()}}); \code{control} and \code{prune} are then ignored
+(with a warning when they are given) and not validated; the fit records \code{prune = "none"}.
+\code{fit(formula, data)} receives the model frame of one development year (the features,
+\code{rep_delay}, \verb{X0, ..., Xl} and the response \code{X(l+1)}, one row per training claim) and returns
+a model; \code{predict(model, newdata)} receives the same columns without the response and must
+return a numeric vector (or one-column matrix) with one finite value per row, which is checked
+for every prediction; an optional \code{simulate(model, newdata)} with the same contract is used by
+\code{predict(fit, completion = "draw")}. \code{\link[=two_part_learner]{two_part_learner()}} builds one from two models.}
 
 \item{object}{A \code{reserve_tree} fit (for \code{summary}).}
 
-\item{...}{Unused.}
+\item{...}{Not used; an argument given here is an error.}
 }
 \value{
 An object of class \code{c("reserve_tree", "reserve_fit")}: a list with the
@@ -39,7 +55,10 @@ fitted trees (\code{fits}, one per development year, \code{fits[[l + 1]]} for de
 applied), training sizes (\code{n_train}), \code{prune}, \code{features}, \code{feature_levels}, \code{L},
 \code{t}, the panel, the control, the RNG information (\code{rng}), the package versions
 (\code{versions}) and the call. \code{summary()} returns the same information with a table of
-leaves and depths per development year.
+leaves and depths per development year. With a user-supplied \code{learner}, \code{fits} holds the
+learner's models, whatever \code{fit()} returned; \code{print()} and \code{summary()} do not inspect them
+and report the training sizes per development year (the tree columns and the control
+apply to the default learner only).
 }
 \description{
 Fits a single-tree reserving model: for every development year \verb{l = 0, ..., L - 1}
@@ -51,8 +70,10 @@ reported by development year \code{l} whose payment in development year \code{l 
 observed at the valuation date (reporting delay \verb{<= l} and \code{acc_year + l + 1 <= t});
 every fitted development year needs at least two such claims. Each tree is grown with
 the given control (default \code{cp = 0} with ten-fold cross-validation) and, by default,
-pruned at the first minimum of the cross-validated error, the pruning rule of
-\enc{Janoušek}{Janousek} and \enc{Pešta}{Pesta} (2025), the source article.
+pruned at the smallest cross-validated error (the simplest tree on ties), the pruning rule of
+\enc{Janoušek}{Janousek} and \enc{Pešta}{Pesta} (2025), the source article (deliberately not
+\pkg{rpart}'s customary one-standard-error rule, which prunes more and would turn more of the
+late, mostly-zero development years into single-leaf trees).
 }
 \details{
 \code{predict()} completes the payment histories of all reported claims recursively one

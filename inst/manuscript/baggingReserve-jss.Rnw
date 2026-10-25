@@ -1,0 +1,1460 @@
+\documentclass[article,nojss]{jss}
+
+%% -- LaTeX packages and custom commands ---------------------------------------
+\usepackage{orcidlink,thumbpdf,lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,array}
+\newcommand{\class}[1]{`\code{#1}'}
+\newcommand{\fct}[1]{\code{#1()}}
+%% sections of the supplementary material (supplement.Rnw numbers them S1, S2, ...)
+\newcommand{\supp}[1]{Section~S#1}
+
+%% knitr: Sweave-style Sinput/Soutput environments (defined by jss.cls) and the "R> " prompt.
+<<setup, include=FALSE>>=
+knitr::render_sweave()
+local({   # a chunk with together = TRUE (code and output) is kept on one page, not interrupted by a float
+  chunk_hook <- knitr::knit_hooks$get("chunk")
+  knitr::knit_hooks$set(chunk = function(x, options) {
+    x <- chunk_hook(x, options)
+    if (isTRUE(options$together)) paste0("\\par\\noindent\\begin{minipage}{\\linewidth}\n", x, "\n\\end{minipage}\\par\n") else x
+  })
+})
+knitr::opts_chunk$set(prompt = TRUE, comment = NA, highlight = FALSE, tidy = FALSE,
+  fig.path = "figure/knitr-", fig.align = "center", cache = FALSE, message = FALSE, warning = FALSE,
+  error = FALSE)   # an R error stops the build; chunks that show an error set error = TRUE
+options(prompt = "R> ", continue = "+  ", width = 70, useFancyQuotes = FALSE, digits = 4,
+        scipen = 8)
+library("baggingReserve")
+fmt <- function(x, digits = 0) format(round(x, digits), big.mark = ",", nsmall = digits, trim = TRUE)
+bfmt <- function(b) if (b >= 1e4) formatC(b, format = "d", big.mark = "{,}") else as.character(b)   # house style: 1000, 10{,}000
+pct <- function(x, digits = 1) paste0(formatC(100 * x, format = "f", digits = digits), "\\%")
+pct_small <- function(x, digits = 2) if (abs(100 * x) < 0.5 * 10^(-digits)) paste0("less than ", formatC(10^(-digits), format = "f", digits = digits), "\\%") else pct(abs(x), digits)
+signed <- function(e, digits = 1) if (e < 0) paste("underpredicted by", pct(-e, digits)) else paste("overpredicted by", pct(e, digits))
+sentence <- function(x) paste0(toupper(substring(x, 1, 1)), substring(x, 2))   # sentence-style table labels
+net_of <- function(a, b) if (sign(a) != sign(b)) ", so the component errors partly offset each other" else ", so the component errors add up"
+missing_txt <- function(what) sprintf("\\textbf{[deposit %s missing]}", gsub("_", "\\\\_", what))   # the marker for an absent deposit
+latex_table <- function(df, digits = 0, align = NULL) {
+  # a plain booktabs tabular; numeric columns rounded and comma-separated
+  is_num <- vapply(df, is.numeric, TRUE)
+  body <- df
+  for (j in which(is_num)) body[[j]] <- ifelse(is.na(df[[j]]), "", fmt(df[[j]], digits))
+  if (is.null(align)) align <- paste0("l", strrep("r", ncol(df) - 1L))
+  cat("\\begin{tabular}{", align, "}\n\\toprule\n", sep = "")
+  cat(paste(gsub("_", "\\\\_", names(df)), collapse = " & "), "\\\\\n\\midrule\n")
+  for (i in seq_len(nrow(df))) cat(paste(as.character(unlist(body[i, ])), collapse = " & "), "\\\\\n")
+  cat("\\bottomrule\n\\end{tabular}\n")
+}
+latex_table_grouped <- function(df, groups, sub, digits = 0, align = NULL, first = names(df)[1], lead = 1L) {
+  # header row 1: group labels spanning columns; row 2: the sub-labels; `lead` leading columns unspanned
+  is_num <- vapply(df, is.numeric, TRUE); body <- df
+  for (j in which(is_num)) body[[j]] <- ifelse(is.na(df[[j]]), "", fmt(df[[j]], digits))
+  if (is.null(align)) align <- paste0("l", strrep("r", ncol(df) - 1L))
+  cat("\\begin{tabular}{", align, "}\n\\toprule\n", sep = "")
+  spans <- vapply(groups, function(g) g$span, 1L); starts <- cumsum(c(lead + 1L, spans))[seq_along(spans)]
+  cat(strrep(" & ", lead), paste(sprintf("\\multicolumn{%d}{c}{%s}", spans, vapply(groups, function(g) g$label, "")), collapse = " & "), " \\\\\n", sep = "")
+  cat(paste(sprintf("\\cmidrule(lr){%d-%d}", starts, starts + spans - 1L), collapse = ""), "\n", sep = "")
+  cat(first, " & ", paste(sub, collapse = " & "), " \\\\\n\\midrule\n", sep = "")
+  for (i in seq_len(nrow(df))) cat(paste(as.character(unlist(body[i, ])), collapse = " & "), "\\\\\n")
+  cat("\\bottomrule\n\\end{tabular}\n")
+}
+live_file <- "results/live/reserve_prediction_live.rds"
+full_file <- "results/full/reserve_prediction_full.rds"
+info_file <- "results/live/run_info.rds"
+have_live <- file.exists(live_file); have_full <- file.exists(full_file)
+robust_file <- "results/robustness/portfolios.csv"; have_robust <- file.exists(robust_file)
+mtpl_dir <- "results/mtpl"; have_mtpl <- file.exists(file.path(mtpl_dir, "table_benchmarks.csv"))
+timing_file <- "results/robustness/timing.csv"; seeds_file <- "results/robustness/bagging_seeds.csv"
+if (have_live) { res_live <- readRDS(live_file); run_info <- readRDS(info_file) }
+ctrl_txt <- function(ct) sprintf("\\code{cp = %g}, \\code{xval = %d}, \\code{minsplit = %d}, \\code{minbucket = %d}, \\code{maxdepth = %d}",
+                                 ct$cp, as.integer(ct$xval), as.integer(ct$minsplit), as.integer(ct$minbucket), as.integer(ct$maxdepth))
+if (have_live) { ctrl_tree <- ctrl_txt(run_info$control); ctrl_bag <- ctrl_txt(readRDS("results/live/bagging_live.rds")$control) }
+hyper_txt <- if (have_live) sprintf("All fits in this paper use the package's default \\fct{rpart.control} settings: %s for the single trees, which are then pruned to the subtree with the smallest cross-validated error (the simplest one on ties), and %s for the unpruned bootstrap trees. No hyperparameter was tuned on any of the portfolios, and the out-of-bag scores were not used to select any setting.", ctrl_tree, ctrl_bag) else ""
+if (have_full) res_full <- readRDS(full_file)
+B_full_txt <- if (have_full) gsub(",", "{,}", fmt(res_full$B), fixed = TRUE) else "?"   # math mode
+generation <- readLines("../data-raw/GENERATION.txt")
+# the number of replicates of each deposit, for captions and prose (never typed by hand)
+B_live_txt <- if (have_live) as.character(run_info$B) else "?"
+dep_B <- function(f, read) if (file.exists(f)) as.character(read(f)) else "?"
+B_mtpl_txt <- dep_B(file.path(mtpl_dir, "mtpl_fit.rds"), function(f) readRDS(f)$B)
+B_robust_txt <- dep_B("results/robustness/config.csv", function(f) with(read.csv(f), value[key == "B"]))
+B_oc_txt <- dep_B("results/open_closed/config.csv", function(f) read.csv(f)$B)
+# every deposit present must match its MD5SUMS manifest (paper/replication/md5_manifest.R)
+source("replication/md5_manifest.R")
+deposits <- Filter(dir.exists, file.path("results", c("live", "full", "portfolio_b", "mtpl", "t11", "robustness", "open_closed", "mix_shift",
+                                                     "engine_benchmark", "reproduction", "revision", "hirem_portfolios", "mtpl_rolling", "well_specified",
+                                                     "well_specified_ablation")))
+rev_dir <- "results/revision"; have_rev <- file.exists(file.path(rev_dir, "MD5SUMS"))
+for (d in deposits) verify_md5_manifest(d)
+@
+
+%% -- Article metainformation (author, title, ...) -----------------------------
+\author{Jan Janou\v{s}ek~\orcidlink{0009-0007-3731-4416}\\Charles University
+   \And Michal Pe\v{s}ta~\orcidlink{0000-0001-5311-0797}\\Charles University}
+\Plainauthor{Jan Janou\v{s}ek, Michal Pe\v{s}ta}
+
+\title{\pkg{baggingReserve}: Bagging and Regression Trees for Individual Claims Reserving in \proglang{R}}
+\Plaintitle{baggingReserve: Bagging and Regression Trees for Individual Claims Reserving in R}
+\Shorttitle{\pkg{baggingReserve}: Individual Claims Reserving in \proglang{R}}
+
+\Abstract{
+  The \proglang{R} package \pkg{baggingReserve} provides three things for claim-level loss
+  reserving: a data contract that turns a table of claims and a table of payment transactions
+  into a claim-by-development-year panel at a valuation date; a recursion engine that completes
+  the payment history of every reported claim with one regression per development year, through
+  an interface for user-supplied learners and with plugged-in or simulated completion; and
+  back-tests that score a prediction, by calendar year and separately for reported claims and
+  claims incurred but not reported (IBNR), against realised payments and a reference method
+  such as the chain ladder. The default baseline is the method of \citet{Janousek+Pesta:2025}:
+  regression trees with bagging, whose replicates describe resampling variation, not a
+  predictive distribution, and chain-ladder projections of the IBNR claim counts. On a shipped
+  synthetic portfolio, further portfolios from the same generator and an illustrative motor
+  third-party liability dataset, the standard chain ladder is more accurate than the bagged
+  trees on most portfolios. A correctly specified simulation shows that the default plug-in
+  completion is biased for multi-year totals when whether a claim pays depends on its payment
+  history; simulated completion removes most of that bias. Only static claim features are
+  supported. The package makes such checks routine, so that claim-level methods can be tested
+  on a user's own data before they are relied upon.
+}
+
+\Keywords{claim-level reserving, back-testing, bagging, regression trees, chain ladder, \proglang{R}}
+\Plainkeywords{claim-level reserving, back-testing, bagging, regression trees, chain ladder, R}
+
+\Address{
+  Jan Janou\v{s}ek, Michal Pe\v{s}ta\\
+  Department of Probability and Mathematical Statistics\\
+  Faculty of Mathematics and Physics\\
+  Charles University\\
+  Sokolovsk\'a 49/83, 186 00 Prague, Czech Republic\\
+  E-mail: \email{janousek@karlin.mff.cuni.cz}, \email{pesta@karlin.mff.cuni.cz}
+}
+
+\begin{document}
+
+\noindent\emph{This vignette is the manuscript submitted to the \emph{Journal of Statistical
+Software}, compiled with \pkg{baggingReserve} \Sexpr{packageVersion("baggingReserve")}, the version
+submitted with it. The supplementary material, the replication scripts and the deposited
+results accompany the submission.}
+
+%% =============================================================================
+\section{Introduction} \label{sec:intro}
+
+A non-life insurer must hold reserves for the payments it still owes on claims that have already
+occurred. At a valuation date $t$, these claims are of two kinds: claims already reported to
+the insurer, open or closed (a closed claim can reopen), and claims incurred but not yet
+reported (IBNR). Classical reserving methods such as the chain ladder
+\citep{Mack:1993, England+Verrall:2002} work on run-off triangles, i.e., on payments aggregated
+by accident year and development year; machine-learning extensions of the aggregate models
+exist as well \citep{Gabrielli+Richman+Wuthrich:2020}. Aggregation discards the information
+carried by the individual claim: its type, characteristics of the insured, reporting time and
+payment history. Individual (micro-level) reserving methods keep it; see
+\citet{Wuthrich:2018} for a machine-learning formulation on which the method implemented here
+builds. Tree-based individual methods include the censored regression trees of
+\citet{LopezMilhaudTherond2016, LopezEtAl2019}, the nonparametric approach of
+\citet{BaudryRobert2019} and the gradient boosting of \citet{Duval+Pigeon:2019};
+\citet{DelongLindholmWuthrich2022} use individual claims data in a collective reserving model,
+and \citet{Hiabu+Hofman+Pittarello:2023} forecast the numbers of IBNR claims from individual
+reporting data with feature-dependent development factors.
+
+In what we call the source article, \citet{Janousek+Pesta:2025} predict the outstanding
+payments claim by claim. For each development year, one regression tree predicts a reported
+claim's payment in the next year from its static features and its payment history; the trees
+are applied recursively to complete every reported claim's payment history; bootstrap
+aggregating (bagging, \citealp{Breiman:1996}) yields replicate reserve predictions and an
+out-of-bag (OOB) diagnostic; and payments of IBNR claims are estimated from chain-ladder
+projections of the reporting counts and the average payment by development year. The method was
+originally implemented in a script around \pkg{rpart} \citep{rpart} and \pkg{ipred}
+\citep{ipred}.
+
+This paper presents \pkg{baggingReserve}, an \proglang{R} package for claim-level reserving and
+for its evaluation against realised payments. It makes three contributions. First, a \emph{data contract}: the constructor
+\fct{claims\_panel} takes a table of claims and a table of payment transactions with
+user-specified column names, enforces the valuation date on both, distinguishes observed zeros
+from future cells, keeps recoveries and claims without payments, and rejects input it cannot
+interpret. Second, a \emph{recursion engine} shared by the single-tree fit, the bagged ensemble
+and user-supplied learners, with a checked learner interface and two completion modes, plugged-in
+means and simulated payments; its bagging draws random numbers from streams allocated to
+replicates and development years, so that the results do not depend on the number of worker
+processes, and each prediction states what its columns and their quantiles mean.
+Third, \emph{back-testing}: \fct{backtest} compares a prediction with the payments that
+followed, by calendar year and separately for reported and IBNR claims, and scores a reference
+method such as the chain ladder against the same truth; valuing a portfolio at an earlier date
+turns any claims history into such a test.
+
+The method of the source article is the default estimator, a documented, reproducible
+claim-level baseline against which other learners and the chain ladder can be measured; it is
+not more accurate than the chain ladder on most portfolios studied here
+(Section~\ref{sec:evaluation}), and it has not been validated against the source article's
+numbers, whose portfolio is not available. The package is best understood as a harness for
+finding out whether claim-level information helps on one's own data.
+
+\begin{table}[t!]
+\centering
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{1.9cm}>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{2.2cm}>{\raggedright\arraybackslash}p{1.6cm}>{\raggedright\arraybackslash}p{3.6cm}@{}}
+\toprule
+Software & Input & Target & IBNR claims & Open vs.\ closed claims & Beyond the point prediction \\
+\midrule
+\pkg{ChainLadder}, \pkg{chainladder} & triangle & aggregate payments & in the aggregate & not separated & Mack standard errors, bootstrap, further aggregate models \\
+\pkg{DCL} & triangles of counts and payments & aggregate payments, RBNS and IBNR & counts $\times$ estimated severity & not separated & bootstrap predictive distribution \\
+\pkg{ReSurv} & individual claims & numbers of IBNR claims & counts only & -- & none \\
+\pkg{hirem} & individual claims & payments of open reported claims & not modelled & settlement layer & simulated paths \\
+\midrule
+\pkg{baggingReserve} & claims + payments & payments per claim and development year & counts $\times$ pooled mean payment & not modelled (\mbox{\supp{5}}) & replicate quantiles (resampling variation only); OOB diagnostic; back-tests \\
+\bottomrule
+\end{tabular}
+\caption{Software related to \pkg{baggingReserve}. Only the Mack and bootstrap outputs of the
+chain-ladder packages, the bootstrap of \pkg{DCL} and the simulated paths of \pkg{hirem} quantify reserve uncertainty
+(Section~\ref{sec:bagging} explains the replicate quantiles and out-of-bag diagnostic of
+\pkg{baggingReserve}).}
+\label{tab:software}
+\end{table}
+
+Table~\ref{tab:software} compares the package with related software. \pkg{ChainLadder}
+\citep{ChainLadder} in \proglang{R} and \pkg{chainladder} \citep{chainladder-python} in
+\proglang{Python} implement aggregate reserving on triangles, from the chain ladder with Mack's
+standard errors to bootstrap and further models; \pkg{baggingReserve} uses only the standard
+chain ladder, as a comparator and for the count projection, and is no substitute for these
+packages in aggregate reserving. The double chain ladder of \citet{MartinezMiranda+Nielsen+Verrall:2012},
+implemented in \pkg{DCL} \citep{DCL}, adds the triangle of reported claim counts to the paid
+triangle, estimates a reporting delay, a payment delay and a mean payment per claim, and so
+separates the reserve into reported but not settled (RBNS) and IBNR claims, with a bootstrap for
+its predictive distribution. Its IBNR part has the structure of the IBNR component here,
+projected counts times a payment per claim, and it is the natural stronger aggregate comparator;
+this paper does not use it (Section~\ref{sec:comparators}). \pkg{ReSurv} \citep{ReSurv} implements the IBNR count models of
+\citet{Hiabu+Hofman+Pittarello:2023} and does not model payments; its counts could replace the
+chain-ladder count projection of the IBNR component, which the package does not automate.
+\pkg{hirem} \citep{Crevecoeur+Robben+Antonio:2022, hirem} fits sequential layers (settlement,
+payment occurrence, payment size) to one row per claim and development year counted from
+reporting and simulates the payment paths of the claims open at the valuation date; claims not yet
+reported are outside the model and a closed claim pays nothing further. It thus models the payment
+process of open claims more richly, whereas \pkg{baggingReserve} completes every reported claim,
+open or closed, from the two raw tables with one regression per development year, allows payments
+of either sign and adds an IBNR component, but cannot allocate the reported-claim reserve reliably
+between open and closed claims; on that target \pkg{hirem} is the more accurate of the two
+(Section~\ref{sec:evaluation}). Generic ensemble packages \citep{ipred, randomForest,
+Wright+Ziegler:2017} supply learners but none of the reserving structure, and \pkg{SynthETIC}
+\citep{Avanzi+Taylor+Wang+Wong:2021} and \pkg{SPLICE} \citep{Avanzi+Taylor+Wang:2023} simulate
+the individual claims data such methods are tested on.
+
+Section~\ref{sec:method} states the method as implemented and Section~\ref{sec:design}
+describes the package. Section~\ref{sec:illustration} illustrates it on a toy example, on the
+shipped portfolio, at earlier valuation dates and on a motor third-party liability dataset,
+summarises the evaluation of the method, and describes how to reproduce the results.
+Section~\ref{sec:summary} concludes. The supplementary material, whose sections are cited as S1 to
+S9, holds the detailed evaluation:
+the generator of the shipped data, a second portfolio with another data layout, further
+portfolios, the open/closed allocation, a changing business mix, studies of simulated
+completion, other learners and \pkg{hirem}, the motor case in detail, and the leaf size of the
+bootstrap trees.
+
+%% =============================================================================
+\section{Reserving with regression trees and bagging} \label{sec:method}
+
+\subsection{Notation and data}
+
+Time is discrete, in years. A claim $r$ has an accident year $a_r$, is reported with a delay of
+$d_r \in \{0, 1, \dots\}$ years, and generates incremental payments $X_{r,0}, X_{r,1}, \dots$,
+where $X_{r,l}$ is the total paid in development year $l$, i.e., in calendar year $a_r + l$;
+payments can be negative (recoveries) and are zero before the claim is reported. A maximum
+development year $L$ is fixed: payments beyond $L$ are outside the model. The valuation date is
+the end of year $t$. The insurer then knows every claim with $a_r + d_r \le t$ (the reported
+claims), and for each of them the payments $X_{r,l}$ with $a_r + l \le t$; the cells with
+$a_r + l > t$ represent future payments. Summing over the claims of an accident year $i$ gives
+the familiar run-off triangle, observed above the diagonal $i + l = t$.
+
+The static features of a claim (in the source article: type, age of the insured, weekday of
+the accident) and its reporting delay form the covariates. Let $\mathbf{x}_{r,l} = (\text{features}_r,
+d_r, X_{r,0}, \dots, X_{r,l})$ denote the information about claim $r$ up to development year $l$.
+The model of the source article assumes that $X_{r,l+1}$ given $\mathbf{x}_{r,l}$ has a conditional
+distribution $p_l(\mathbf{x}_{r,l})$ that does not depend on the accident year; the regression
+tree estimates the conditional mean of that distribution. With $\mathcal{F}_t$ the information
+available at the valuation date, the target is the reserve
+$\mathrm{E}[\sum_r \sum_{l \le L,\; a_r + l > t} X_{r,l} \mid \mathcal{F}_t]$, the sum running
+over reported and unreported claims; for an unreported claim, $a_r + d_r > t$, the summands are its
+whole payments $X_{r,l}$ with $l \ge d_r$, which Section~\ref{sec:ibnr} estimates in the aggregate. For a reported claim more than one year from the valuation
+date, the method plugs the predicted mean of each future payment into the history used by the
+next tree (Section~\ref{sec:trees}). Because the trees are nonlinear functions of the history,
+the mean of a tree's prediction is in general not the tree's prediction at the mean history, so
+this recursion approximates the conditional expectation and does not equal it;
+Section~\ref{sec:learners} describes the simulated alternative.
+
+\subsection{One tree per development year and recursive completion} \label{sec:trees}
+
+For every development year $l = 0, \dots, L - 1$, a regression tree $T_l$ is fitted with
+response $X_{r,l+1}$ and covariates $\mathbf{x}_{r,l}$ on the training set
+\begin{equation}
+  S_l = \{ r : d_r \le l \text{ and } a_r + l + 1 \le t \},
+\end{equation}
+the claims that were reported by development year $l$ and whose payment in development year
+$l + 1$ is observed at the valuation date. Payments before reporting are structurally zero and
+are neither predicted nor used as responses: a claim enters the training set of development
+year $l$ only from its reporting year on. The trees are \pkg{rpart} analysis-of-variance
+(ANOVA) trees \citep{rpart, Breiman+Friedman+Olshen+Stone:1984}, grown with complexity
+parameter zero and pruned to the subtree with the smallest 10-fold cross-validated error (the
+simplest one on ties), as in the source article, not by \pkg{rpart}'s customary
+one-standard-error rule, which prunes more.
+
+Prediction proceeds year by year. The tree $T_l$ predicts $X_{r,l+1}$ for the claims with
+$a_r + l + 1 > t$; its payment-history covariates $X_{r,0}, \dots, X_{r,l}$ are observed where
+$a_r + k \le t$ and are the predictions of earlier trees where $a_r + k > t$. Every reported
+claim is completed, including claims recorded as closed, because a claim can reopen; the trees
+therefore do not distinguish open from closed claims, and naming the status at the valuation
+date as a feature does not fix this (\supp{5}).
+Figure~\ref{fig:schematic} shows the pattern of observed, predicted and unavailable cells.
+
+<<schematic, echo=FALSE, fig.width=6.5, fig.height=2.9, out.width="0.46\\textwidth", fig.cap="Cells of the run-off triangle for a portfolio with $t = 10$ and $L = 9$ (smaller than the shipped one, for legibility): rows represent accident years (each standing for all claims of that year) and columns represent development years. Dark: observed at the valuation date. Light: predicted recursively, development year by development year from left to right. Hatched: training cells for the tree indexed by $l = 2$, covariates (columns 0--2, hatched one way) and response (column 3, hatched the other way) of the claims reported by development year 2 with accident year $\\le 7$.">>=
+op <- par(mar = c(3, 3.5, 0.5, 0.5), mgp = c(2, 0.6, 0))
+plot(NA, xlim = c(0, 10), ylim = c(10, 0), xlab = "development year l", ylab = "accident year",
+     axes = FALSE, asp = 1)
+axis(1, at = 0:9 + 0.5, labels = 0:9, tick = FALSE); axis(2, at = 1:10 - 0.5, labels = 1:10, tick = FALSE, las = 1)
+for (a in 1:10) for (l in 0:9) {
+  obs <- a + l <= 10
+  rect(l, a - 1, l + 1, a, col = if (obs) "grey45" else "grey90", border = "white")
+}
+for (a in 1:7) rect(0, a - 1, 3, a, density = 18, angle = 45, border = NA, col = "black")
+for (a in 1:7) rect(3, a - 1, 4, a, density = 18, angle = -45, border = NA, col = "black")
+par(op)
+@
+
+\subsection{Bagging, replicates and the out-of-bag score} \label{sec:bagging}
+
+Bagging replaces each tree $T_l$ by an ensemble $T_{l,1}, \dots, T_{l,B}$. Each tree $T_{l,b}$
+is grown on a bootstrap sample (drawn with replacement, duplicates kept) of $S_l$, drawn
+independently for each development year rather than once per claim. Unlike the
+single trees of Section~\ref{sec:trees}, the bootstrap trees are grown with complexity
+parameter zero and left unpruned, without cross-validation (pruning and cross-validation are
+configurable through arguments), as in the source article's code. The source article
+and the package define \emph{replicate} $b$ as the completion of all payment histories with the
+trees $T_{0,b}, \dots, T_{L-1,b}$, one per development year, applied recursively as in
+Section~\ref{sec:trees}. Writing $F$ for the completion map,
+\begin{equation}
+  R_b = F(T_{0,b}, \dots, T_{L-1,b}), \qquad \bar R = \frac{1}{B} \sum_{b=1}^B R_b,
+\end{equation}
+the bagged reserve prediction is the mean $\bar R$ of the completed replicates. Because the
+recursion is nonlinear, this is not the same as completing the histories once with tree
+predictions averaged within each development year, which the package does not implement. The empirical quantiles of $R_1, \dots,
+R_B$, the \emph{replicate quantiles}, describe only the variation, under bootstrap resampling,
+of the reserve predicted by one set of unpruned bootstrap trees: the numbers of unreported
+claims are projected once and held fixed across replicates (Section~\ref{sec:ibnr}), no
+payment noise is simulated, and because the samples are drawn per development year they do not
+reproduce how the errors of successive trees are linked through the same claims. The replicate
+quantiles are therefore neither prediction intervals for future payments nor confidence
+intervals for the bagged mean, a realised value inside their range is no coverage statement, and
+the package delivers no predictive distribution of the reserve (``resampling variation'' below).
+
+For the out-of-bag diagnostic of development year $l$, let $\mathcal{B}_l(r)$ be the set of
+replicates whose bootstrap sample of $S_l$ did not contain claim $r$, and let
+$\mathrm{OOB}_l(r) = |\mathcal{B}_l(r)|^{-1} \sum_{b \in \mathcal{B}_l(r)} T_{l,b}(\mathbf{x}_{r,l})$
+denote the average prediction of those trees, computed from the claim's \emph{observed}
+history. With $S_l^\ast = \{ r \in S_l : |\mathcal{B}_l(r)| > 0 \}$ denoting the set of covered
+claims and $y_r = X_{r,l+1}$,
+\begin{equation}
+  \mathrm{OOB\text{-}error}_l = \frac{1}{|S_l^\ast|} \sum_{r \in S_l^\ast} (y_r - \mathrm{OOB}_l(r))^2,
+  \qquad
+  \mathrm{OOB\text{-}score}_l = 1 - \frac{\sum_{r \in S_l^\ast} (y_r - \mathrm{OOB}_l(r))^2}
+                                        {\sum_{r \in S_l} (y_r - \bar y_l)^2},
+  \label{eq:oob}
+\end{equation}
+where the denominator runs over all training claims of development year $l$ and $\bar y_l$ is
+their mean response. With complete coverage the score is interpreted like $R^2$: one for a
+perfect fit, negative when the ensemble is worse than predicting the mean. A claim is left out
+of a bootstrap sample of $n_l$ claims with probability $(1 - 1/n_l)^{n_l} \approx e^{-1}$, so it
+is covered with probability about $1 - (1 - e^{-1})^B$: coverage is essentially complete for
+$B$ in the hundreds but not for very small $B$, and then numerator and denominator run over
+different sets and the score is biased upwards. The package therefore reports the coverage and
+also the ordinary coefficient of determination over the covered claims alone
+(\code{oob\_score\_covered}). The score assesses the one-year regressions given observed
+histories; it does not validate the recursive multi-year forecast or the IBNR component.
+
+\subsection{Claims incurred but not reported} \label{sec:ibnr}
+
+Let $N_{i,d}$ be the number of claims of accident year $i$ reported with delay $d$; the
+triangle of these counts is observed for $i + d \le t$. Theorem~1 of the source article
+expresses the expected payments of the unreported claims of accident year $i$ as the product of
+the expected number of claims and the expected payments per claim, when the payments of a claim
+reported after $t$ are independent of the information at $t$; the unreported claims have no
+recorded features, delay or history, so the trees cannot be applied to them. The package
+implements the source article's estimator of this product. It completes the count triangle by
+a chain-ladder projection, which is justified when claims arrive as a homogeneous marked Poisson
+process whose reporting-delay distribution does not depend on the accident year
+\citep[Section~6.1]{Verrall+Wuthrich:2016}; $\widehat U_{i,l} = \sum_{d \le l} \widehat
+N_{i,d}\,\mathbf{1}(i + d > t)$ is the projected number of claims of accident year $i$ reported
+after the valuation date with delay at most $l$. The payment per such claim in development year
+$l$ is estimated by the pooled mean payment of the reported claims in that development year,
+\begin{equation}
+  \hat\mu_l = \frac{\sum_i \widehat R_{i,l}}{\sum_i \sum_{d \le l,\; i + d \le t} N_{i,d}},
+  \label{eq:mu}
+\end{equation}
+where, for a fixed replicate, $\widehat R_{i,l}$ denotes the sum of the observed and predicted
+payments of the reported claims of accident year $i$ in development year $l$, and the
+denominator counts the reported claims of all accident years with delay at most $l$ (observed
+counts only). Because the numerator contains the replicate's predicted payments of the reported
+claims, an error of the reported-claim component propagates into the IBNR component. The IBNR payment in cell $(i, l)$ is $\widehat U_{i,l}\,\hat\mu_l$; it is zero in
+observed cells because every claim of accident year $i$ reported after $t$ has delay $d > t -
+i$. The projected counts are the same in every replicate, so the replicate spread of the IBNR
+component comes from $\hat\mu_l$ alone and contains no count uncertainty.
+
+The estimator transfers the pooled payment behaviour of the reported claims to the
+late-reported claims. It requires that, in development year $l$, a claim of accident year $i$
+reported after $t$, with delay $t - i < d \le l$, has the same expected payment as the pooled
+mean of the reported claims with delay at most $l$. Because $\hat\mu_l$ pools all accident
+years, this needs both that, given $l$, the expected payment does not depend on the reporting
+delay among claims with $d \le l$, and that it does not depend on the accident year: a trend in
+the payments across accident years, such as the inflation of the generator of
+Section~\ref{sec:portfolio}, also biases $\hat\mu_l$ for the recent accident years that carry most
+IBNR claims. A
+payment pattern that shifts with the delay, $g(l - d)$ say, violates this condition even when
+every claim has the same payment pattern after reporting: with delays $0$ and $1$ and $n_0$ and
+$n_1$ reported claims, respectively, the pooled mean differs from the expected payment of a
+late-reported claim with delay $1$ by $n_0\,[g(l) - g(l-1)]/(n_0 + n_1)$, so a decreasing
+pattern makes the estimator underpredict the payments of late-reported claims. A different
+business mix among early- and late-reported claims also violates the condition, in either
+direction. The pooling assumption is the source article's working approximation; its
+suitability should be questioned when a portfolio's late-reported claims differ in kind
+(\supp{3}). The default count projection is the standard chain ladder on cumulative counts
+without rounding; the source article's incremental ratios with rounding are an option
+(Section~\ref{sec:comparators}).
+
+%% =============================================================================
+\section{Package design} \label{sec:design}
+
+The package is organised along the workflow construct $\to$ fit $\to$ predict $\to$ aggregate
+$\to$ diagnose $\to$ back-test. Table~\ref{tab:api} lists the objects and their methods.
+
+\begin{table}[t!]
+\centering
+\footnotesize
+\begin{tabular}{ll>{\raggedright\arraybackslash}p{7.6cm}}
+\toprule
+Function & Returns & Methods and functions applying to the result \\
+\midrule
+\fct{claims\_panel} & \class{claims\_panel} & \code{print}, \code{summary}, \code{as.data.frame}, \fct{as\_triangle}, \fct{claim\_counts} \\
+\fct{reserve\_tree} & \class{reserve\_tree} & \code{print}, \code{summary}, \code{predict}, \code{plot} \\
+\fct{bag\_reserve} & \class{bag\_reserve} & \code{print}, \code{summary}, \code{predict}, \code{plot}, \fct{oob\_score} \\
+\code{predict()} on a fit & \class{reserve\_prediction} & \code{print}, \code{summary}, \code{plot}, \code{as.data.frame}, \fct{as\_triangle}, \fct{calendar\_year\_payments}, \fct{claim\_reserves} \\
+\fct{ibnr\_reserve} & \class{reserve\_prediction} & adds the IBNR component to a prediction \\
+\fct{chain\_ladder} & \class{chain\_ladder} & \code{print}, \fct{as\_triangle}, \fct{calendar\_year\_payments} \\
+\fct{backtest} & \class{reserve\_backtest} & \code{print}, \code{as.data.frame} \\
+\fct{two\_part\_learner} & list & the argument \code{learner} of \fct{reserve\_tree} and \fct{bag\_reserve} (Section~\ref{sec:learners}) \\
+\bottomrule
+\end{tabular}
+\caption{Exported functions, the classes of their return values and the methods and functions that apply to them. Objects of these classes are S3 lists; \fct{as\_triangle}, \fct{calendar\_year\_payments} and \fct{oob\_score} are generics.}
+\label{tab:api}
+\end{table}
+
+\subsection{The data contract}
+
+\fct{claims\_panel} takes two data frames, one with a row per claim and the other with a row
+per payment transaction, the valuation date \code{t}, the horizon \code{L} and the names of the
+columns holding the identifier (\code{id}), the accident year (\code{acc\_year}), the reporting
+year or delay (\code{rep\_year}, \code{rep\_delay}), the payment year (\code{event\_year}) and
+the amount (\code{paid}), with the defaults of the shipped data (Table~\ref{tab:defaults} lists
+the other arguments). The argument \code{id} may name a different identifier column for each table. The constructor returns a claims table (identifier, accident year, reporting delay and
+features), a payment matrix with one row per reported claim and columns \code{X0}, \ldots,
+\code{XL}, the observation mask and construction diagnostics. Claims are retained if reported
+by \code{t}, and payments are summed by claim and development year; times must be integers
+(dates are converted by the user, as in Section~\ref{sec:mtpl}), on any regular grid: years
+here, but quarters or months numbered consecutively work alike. Observed cells without
+payments contain \code{0}, cells after the valuation date \code{NA}; recoveries and claims
+without transactions are retained. The constructor rejects duplicated or missing identifiers,
+payments for claims absent from the claims table or for claims not reported by \code{t},
+payments dated before the accident or the reporting year, reporting delays or observed payments
+beyond \code{L} unless \code{beyond\_L = "drop"} sets them aside (for a long history), and payments
+dated after \code{t} unless \code{future\_payments = "drop"} does so; the numbers and amounts set
+aside are recorded, and the identifiers of the claims set aside travel with the predictions to
+\fct{backtest}. Features are never selected automatically, and
+only static features are supported: information that changes over the life of a claim, such as
+its settlement status or case reserve at the end of each development year, cannot enter the
+panel. This is the main limitation of the design and the reason why the package cannot allocate
+the reserve between open and closed claims. Character columns become factors with sorted levels;
+missing feature values are rejected unless \code{na\_features = "surrogate"} lets \pkg{rpart}'s
+surrogate splits handle them. The reporting delay is always a covariate, and \code{L} is never
+inferred from the data. \fct{as\_triangle} sums the panel into the paid triangle (incremental or
+cumulative) or the triangle of reporting counts, with \code{NA} in the cells after the valuation
+date.
+
+\subsection{Fitting and prediction} \label{sec:fitting}
+
+\fct{reserve\_tree} fits the $L$ pruned trees of Section~\ref{sec:trees}; \fct{bag\_reserve}
+fits the $B \times L$ bootstrap trees of Section~\ref{sec:bagging}. In the package's arguments,
+printed output and tables, the development-year index $l$ of a tree is called its
+\code{period}. Both functions use the same internal recursion engine. For each development
+year, the eligibility conditions determine the training rows and the model frame; the frame's
+column order (features, reporting delay, \code{X0}, \ldots, \code{Xl}, response) is fixed, so
+that \pkg{rpart}'s tie-breaking between equally good splits is reproducible; and the recursive
+completion overwrites only the future cells of the current step, using the completed cells of
+the earlier steps. \Sexpr{hyper_txt}
+
+Calling \fct{predict} on either fit returns a \class{reserve\_prediction}: the observed
+incremental triangle, a table of the future cells (accident year, development year, calendar
+year), and a matrix with one row per future cell and one column per replicate of the predicted
+payments of the reported claims (one column for a single-tree fit), and the completed claim-level
+payment matrix, from which \fct{claim\_reserves} returns the reserve of every reported claim. \fct{calendar\_year\_payments} sums the cells along the diagonals into
+payments per future calendar year plus their total through development year $L$; \fct{summary}
+gives the mean, standard deviation and empirical quantiles of these across the replicates, with
+the quantile type as an argument. The default is \code{type = 7}, \proglang{R}'s default; the
+source article used order statistics, which \code{type = 1} reproduces.
+
+\subsection{Other learners and simulated completion} \label{sec:learners}
+
+Both fitting functions accept an argument \code{learner}, which replaces the \pkg{rpart} trees in
+every development year while the eligibility rules, the bootstrap, the recursion, the out-of-bag
+score and the random-number streams stay the package's. A learner is a list of functions:
+\code{fit(formula, data)} returns a model for one development year $l$; \code{formula} is
+\code{X}$(l+1)$\code{ ~ .} and \code{data} the model frame of Section~\ref{sec:fitting}, with the
+features, \code{rep\_delay} and the payment history \code{X0}, \ldots, \code{X}$l$ as columns, one
+row per training claim (for \fct{bag\_reserve}, per bootstrap draw). \code{predict(model, newdata)}
+returns one number per row of \code{newdata}, which has the same columns without the response.
+An optional \code{simulate(model, newdata)} returns one simulated payment per row. Every prediction
+of a learner, for the completion and the out-of-bag votes alike, receives this frame and is
+checked: a numeric vector with one finite value per row, else an error naming the stage and the
+development year. \fct{two\_part\_learner} builds a learner from one model for whether a claim pays
+in the development year, fitted to a 0/1 response, and one for the amount of a non-zero payment,
+and checks the output of each, probabilities in $[0, 1]$ included, before combining them; it
+predicts $p \cdot s$ and simulates by drawing the payment indicator, the amount being the
+predicted $s$ unless the size model has a \code{simulate()} of its own. Here both parts
+are regression trees, on the claims of type 3 of the shipped portfolio:
+<<learner-example>>=
+library("baggingReserve")
+data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+cl3 <- synthetic_claims[synthetic_claims$Type == "3", ]
+pay3 <- synthetic_payments[synthetic_payments$Id %in% cl3$Id, ]
+panel3 <- claims_panel(cl3, pay3, t = 12, L = 11,
+  features = c("Age", "AccWeekday"))
+tree_learner <- function(...) list(
+  fit = function(formula, data) rpart::rpart(formula, data = data,
+    method = "anova", control = rpart::rpart.control(...)),
+  predict = function(model, newdata) unname(predict(model, newdata)))
+tp <- two_part_learner(occurrence = tree_learner(cp = 0.001, minbucket = 50),
+  size = tree_learner(cp = 0.001, minbucket = 50))
+fit_tp <- reserve_tree(panel3, seed = 1, learner = tp)
+pred_tp <- predict(fit_tp, completion = "draw", R = 50, seed = 1)
+cy_tp <- calendar_year_payments(pred_tp, "reported")
+round(c(mean = mean(cy_tp["total", ]),
+  quantile(cy_tp["total", ], c(0.025, 0.975))))
+@
+Instead of plugging the predicted mean of each development year into the next,
+\code{completion = "draw"} simulates the payments: for the default trees each one is drawn from
+the training responses of the claim's leaf, for a user-supplied learner from its
+\code{simulate()}. The $R$ columns of the result are simulated completions of the fitted model,
+so their spread is process variability given that model, without estimation variability.
+\code{bag\_reserve(completion = "draw")} simulates one completion per bootstrap replicate from that
+replicate's trees: the spread then adds process variability to the resampling variation of one
+set of unpruned bootstrap trees (still not a predictive distribution; Section~\ref{sec:bagging}). For a bagged fit the completion is chosen when fitting;
+\fct{predict} refuses a different one, and a fit with simulated completion predicts its own
+portfolio only; \fct{print}, \fct{summary}, \fct{plot} and \fct{backtest} describe the sources of
+variability of every prediction. The plug-in default reproduces the
+source article, but it is not a consistent estimator of the multi-year reserve when the occurrence
+of a payment depends on the payment history: in the correctly specified simulation of
+Section~\ref{sec:well-specified} its bias for the total does not vanish as the portfolio grows,
+while simulated completion removes most of it. For totals beyond next year we therefore recommend
+\code{completion = "draw"}, and \fct{print} of a plug-in prediction says so. Neither completion
+is the more accurate on every portfolio of Section~\ref{sec:illustration} (\supp{7}), and the
+calibration of the simulated spread is not examined: a draw resamples the training responses of
+one leaf, few in the late development years. \supp{7} applies
+one- and two-part gradient boosting learners built the same way.
+<<draw-claims, echo=FALSE>>=
+# the sentence above: simulation helps the rolling back-tests on average, not the shipped portfolio at t = 12
+if (have_rev && all(file.exists(file.path(rev_dir, c("bagging_draw.csv", "rolling_backtests.csv"))))) local({
+  bd <- read.csv(file.path(rev_dir, "bagging_draw.csv")); bd <- bd[bd$component == "total", ]
+  e <- setNames(bd$total_mean / bd$total_truth - 1, bd$completion)
+  rl0 <- read.csv(file.path(rev_dir, "rolling_backtests.csv"))
+  stopifnot(abs(e[["draw"]]) > abs(e[["mean"]]), mean(abs(rl0$draw_total_rel)) < mean(abs(rl0$bag_total_rel)))
+})
+@
+
+\subsection{The IBNR component and the comparators} \label{sec:comparators}
+
+\fct{ibnr\_reserve} adds to a prediction a second matrix of the same shape with the IBNR payments
+of Section~\ref{sec:ibnr} and keeps the projected counts, the denominator of
+Equation~\eqref{eq:mu} and the per-replicate $\hat\mu_l$ for inspection; counts that disagree
+with the triangle stored in the prediction (another portfolio, cumulative counts) are an error. \fct{chain\_ladder}
+projects a triangle with \code{NA} in the unobserved cells by the standard chain ladder:
+volume-weighted development factors from the cumulative triangle over the accident years
+observed in both columns, projection from the latest observed value, no tail factor, point
+predictions only. The package's tests check its factors, completed triangle and outstanding
+amounts against \code{ChainLadder::MackChainLadder()} with unit weights. Setting the argument
+\code{projection} to \code{"incremental\_ratio"} applies ratios of incremental column sums to
+the incremental cells instead, which is what the source article's code did for its chain-ladder
+benchmark and for the count projection; \fct{ibnr\_reserve} provides the same option together
+with \code{round = TRUE} for the source article's rounding of the projected counts.
+
+As a comparator, this chain ladder is deliberately the plainest aggregate method: the paid
+triangle alone, no tail factor, no incurred or count information. It has the same target as the
+claim-level method, the payments through development year $L$. The comparisons in this paper are
+with this standard chain ladder, not with the best aggregate method; a stronger one, from
+\pkg{ChainLadder} or the double chain ladder of \pkg{DCL} say, can be scored against the same
+truth through the argument \code{reference} of \fct{backtest}, which takes the prediction of any
+method as payments by future calendar year.
+
+\subsection{Back-testing} \label{sec:backtest}
+
+<<backtest-contract, echo=FALSE>>=
+bt_args_known <- c("pred", "claims", "payments", "id", "acc_year", "event_year", "paid", "probs", "rep_year", "type",
+                   "reference", "reference_component", "observed_to")
+bt_args_new <- setdiff(names(formals(baggingReserve::backtest)), bt_args_known)
+if (length(bt_args_new))   # a newer package version changed the interface: the paragraph below must be revised
+  stop("backtest() has arguments this section does not describe: ", paste(bt_args_new, collapse = ", "))
+@
+\fct{backtest} takes a prediction and the claims and payments tables of the same portfolio,
+including the claims reported after the valuation date, and builds the realised payments of
+every future cell through development year $L$, split into claims reported by $t$ and claims
+reported later (the IBNR truth); payments beyond $L$ are reported as the excluded tail. For each
+component it returns, per future calendar year and in total, the realised and predicted
+payments, their difference and relative error (the difference divided by the realised amount, so
+that its sign reverses in a calendar year of net recoveries), and the replicate range with
+whether the truth lies inside it (descriptive only; Section~\ref{sec:bagging}). With \code{reference}, a
+\class{chain\_ladder} object or a named vector of payments by calendar year, another method is
+scored against the truth of the population it predicts: all claims by default, which requires
+the prediction's IBNR component, or the reported claims (\code{reference\_component =
+"reported"}). A \class{chain\_ladder} reference must have been fitted on the same panel (accident
+years, development years, valuation date and observed payments are checked). The truth tables
+must describe the whole portfolio: the function rejects claims absent from the prediction that
+were reported by $t$, as a selection by the reported claims' identifiers would produce, and
+predicted claims whose accident or reporting year contradicts the prediction, which stores
+both; it refuses a payment before its claim's reporting year, as the constructor does, and counts
+the claims set aside by \code{beyond\_L = "drop"} in the excluded tail, not as missing. Its column
+names default to those given to \fct{claims\_panel}, and it takes the reporting year by the
+constructor's rule, from the reporting delay when the panel was built from one; without a
+reporting year these checks are skipped, with a warning. A future cell
+without transactions counts as a realised zero; when the extract ends earlier,
+\code{observed\_to} names the last fully observed calendar year, and later cells are left
+unscored (\code{NA}) and out of the totals. With the reporting year, the result also compares the
+projected with the realised numbers of IBNR claims by accident year (component \code{counts}),
+which separates the count error of the IBNR component from the error of its mean payment.
+
+\subsection{Reproducibility and parallel execution} \label{sec:storage}
+
+<<rng-probe, echo=FALSE>>=
+# Does reserve_tree(seed =) fix the generator kind? Fit a tiny panel under another session kind
+# and read the kind the fit records (the text below depends on the installed version).
+rng_tree_kind <- local({
+  old <- RNGkind(); on.exit(RNGkind(old[1], old[2], old[3]))
+  RNGkind("L'Ecuyer-CMRG")
+  cl <- data.frame(Id = 1:40, AccYear = rep(1:4, each = 10), RepYear = rep(1:4, each = 10))
+  py <- data.frame(Id = rep(1:40, 2), EventYear = c(cl$AccYear, pmin(cl$AccYear + 1, 4)), Paid = 1:80)
+  py <- py[!duplicated(py[, 1:2]), ]
+  f <- tryCatch(suppressWarnings(reserve_tree(claims_panel(cl, py, t = 4, L = 2), seed = 1)), error = function(e) NULL)
+  if (is.null(f) || is.null(f$rng$kind)) NA_character_ else f$rng$kind[1]
+})
+rng_tree_txt <- if (is.na(rng_tree_kind)) "\\textbf{[the generator kind of \\fct{reserve\\_tree} could not be determined]}" else
+  if (rng_tree_kind == "L'Ecuyer-CMRG") paste("\\fct{reserve\\_tree} draws random numbers only for the cross-validation folds of pruning. With \\code{seed},",
+    "it calls \\code{set.seed(seed)} under the caller's generator kind and restores the caller's state on exit, so its folds, and hence the pruned",
+    "trees, are reproducible only under the same kind; the single-tree fits of this paper use \\proglang{R}'s default kind.") else
+  sprintf("\\fct{reserve\\_tree} draws random numbers only for the cross-validation folds; with \\code{seed}, it uses the generator kind \\code{\"%s\"} whatever the caller's kind, so the pruned trees do not depend on the session's generator.", rng_tree_kind)
+@
+\fct{bag\_reserve} processes the replicates without retaining their trees by default: a worker
+fits the $L$ trees of a replicate on its bootstrap samples, records the out-of-bag predictions
+(``votes''), completes the panel, keeps the aggregated future cells and discards the trees, unless
+\code{keep\_trees = TRUE}; only with the trees (and plug-in completion) can \fct{predict}
+complete another \class{claims\_panel} with the same features, factor levels and horizon.
+
+Its random numbers come from the \code{"L'Ecuyer-CMRG"} generator
+\citep{LEcuyer+Simard+Chen+Kelton:2002}. Replicate $b$ receives stream $b$ after the seed, and
+development year $l$ receives substream $l + 1$ within that stream; a worker sets
+that state before drawing a bootstrap sample. Under the same software, the completed replicates are therefore identical for any number of workers, any
+batching of replicates and any scheduling, and the first $B$ replicates of a larger run are those
+of a run with $B$ replicates; the out-of-bag sums are accumulated batch by batch and can differ in
+their last floating-point digits. An explicit \code{seed} leaves the caller's generator kind and
+state unchanged; with \code{seed = NULL} the seed is drawn from it. \Sexpr{rng_tree_txt} The source
+article's code drew its bootstrap samples with \fct{bagging} from \pkg{ipred} under a different
+seeding scheme, so its replicates cannot be reproduced exactly. Parallel execution uses forked
+processes on Unix (\pkg{parallel}) and a socket cluster elsewhere. Socket workers are fresh
+\proglang{R} sessions: they receive the variables of the global environment and the attached
+packages that the functions of a user-supplied learner refer to (found with \pkg{codetools}), so
+that a learner written at top level gives the same replicates on every backend; one that reaches
+an object only by name, through \fct{get} say, fails on them with a message saying so.
+
+\subsection{Practical use} \label{sec:practical}
+
+<<practical, echo=FALSE>>=
+cov_B <- function(B) 1 - (1 - exp(-1))^B
+bss_file <- "results/robustness/bagging_seeds_summary.csv"; have_bss <- file.exists(bss_file) && file.exists(seeds_file)
+if (have_bss) {
+  bss <- read.csv(bss_file); bsv <- function(stat, col) bss[[col]][bss$statistic == stat]
+  bseeds <- read.csv(seeds_file)
+  rsd <- function(h) bsv("mean replicate sd", h) / bsv("mean of means", h)
+  live_rsd <- if (have_live) { v <- calendar_year_payments(res_live, "total"); c(sd(v[1, ]) / mean(v[1, ]), sd(v["total", ]) / mean(v["total", ])) } else c(NA, NA)
+  live_mc <- if (have_live) sprintf(" (%s and %s for that of the live run alone, \\supp{2})",
+                                     pct(live_rsd[1] / sqrt(res_live$B), 2), pct(live_rsd[2] / sqrt(res_live$B), 2)) else ""
+  B_txt <- sprintf("Over %d bagging seeds with $B = %d$ on the shipped portfolio, the bagged means vary with a standard deviation of %s of their mean for next year and %s for the total through development year 11, of the order of the replicate standard deviation divided by $\\sqrt{B}$: %s and %s for the replicate standard deviation averaged over the %d seeds%s.",
+    nrow(bseeds), bseeds$B[1], pct(bsv("sd of means relative to mean of means", "next_year"), 2), pct(bsv("sd of means relative to mean of means", "total"), 2),
+    pct(rsd("next_year") / sqrt(bseeds$B[1]), 2), pct(rsd("total") / sqrt(bseeds$B[1]), 2), nrow(bseeds), live_mc)
+} else B_txt <- missing_txt("results/robustness/bagging\\_seeds*.csv")
+bench_file <- "results/engine_benchmark/table_benchmark.csv"; have_bench <- file.exists(bench_file)
+if (have_bench) {
+  bm <- read.csv(bench_file)
+  stopifnot(bm$retained_mb[2] > 100 * bm$retained_mb[1])   # the prose below
+  bench_txt <- sprintf("On the shipped portfolio, a straightforward implementation that fits \\fct{bagging} from \\pkg{ipred} for each development year (\\code{keepX = FALSE}, \\code{coob = FALSE}, the same \\fct{rpart.control}) and keeps its trees, with the components \\pkg{rpart} stores by default, holds %s~GB for $B = %d$ replicates, against %s~MB for \\fct{bag\\_reserve} with its default \\code{keep\\_trees = FALSE} (\\code{replication/\\allowbreak engine\\_benchmark.R}); on one worker it took %s~s, \\fct{bag\\_reserve} %s~s, which also computes the out-of-bag diagnostic and the claim-level reserve. With \\code{keep\\_trees = TRUE} the package keeps all $B \\times L$ unpruned trees as well, and its memory then grows linearly in $B$ in the same way. ",
+    formatC(bm$retained_mb[2] / 1024, format = "f", digits = 1), bm$B[1], formatC(bm$retained_mb[1], format = "f", digits = 0),
+    fmt(bm$elapsed_secs[2]), fmt(bm$elapsed_secs[1]))
+} else bench_txt <- ""
+scale_txt <- if (file.exists(timing_file)) {
+  tm0 <- read.csv(timing_file); ag0 <- aggregate(elapsed_secs ~ ncores, tm0, mean)
+  sprintf("In the timing study of \\supp{2} the time per replicate falls nearly in proportion to the number of workers, %s times faster on %d workers than on one; the other deposited fits ran under other loads.",
+          formatC(ag0$elapsed_secs[1] / ag0$elapsed_secs[nrow(ag0)], format = "f", digits = 1), max(ag0$ncores))
+} else missing_txt(timing_file)
+@
+The main choices are the completion, $B$, $L$, \code{keep\_trees} and the number of workers
+(Table~\ref{tab:defaults} lists the key arguments and defaults). The default \code{completion =
+"mean"} reproduces the source article and is kept for that reason; for totals beyond next year use
+\code{completion = "draw"}, as in the call \code{bag\_reserve(panel, B, seed, completion =
+"draw")} of Section~\ref{sec:portfolio}, and back-test the result at several valuation dates
+(Section~\ref{sec:revalue}).
+
+\emph{The number of replicates.} The Monte Carlo error of the bagged mean is the replicate
+standard deviation divided by $\sqrt{B}$. \Sexpr{B_txt} Replicates in the hundreds therefore fix
+the bagged mean far more precisely than the back-tests of Section~\ref{sec:evaluation} measure
+its error, and the default $B = 100$ suffices for it; the extreme replicate quantiles need more
+(\supp{2} compares $B = \Sexpr{B_live_txt}$ with $B = \Sexpr{B_full_txt}$), and the out-of-bag
+coverage needs $B$ well above ten (it is about \Sexpr{pct(cov_B(10), 1)} at $B = 10$).
+
+\emph{The horizon.} \code{L} is never inferred. The last tree needs training claims with $a_r +
+L \le t$, so $L$ is at most the number of accident years less one when the latest accident year
+is $t$; \fct{backtest} reports the payments beyond $L$ as the excluded tail.
+
+\emph{Memory.} \Sexpr{bench_txt}
+
+\emph{Workers.} \code{ncores} sets the number of worker processes, at most the number of cores
+detected (a larger request is reduced, with a message; it is used as given when that number
+cannot be detected); \code{backend = "auto"} forks on
+Unix, where the workers share the panel, and starts a socket cluster elsewhere, where each
+receives a copy. The results do not depend on these choices (Section~\ref{sec:storage}).
+\Sexpr{scale_txt}
+
+<<defaults-table, echo=FALSE, results="asis">>=
+ns <- asNamespace("baggingReserve")
+key_args <- list(claims_panel = c("t", "L", "features", "accident_years", "na_features", "future_payments", "beyond_L"),
+                 reserve_tree = c("control", "prune", "seed", "learner"),
+                 bag_reserve = c("B", "seed", "ncores", "control", "prune", "oob", "keep_trees", "batch_size", "backend", "claim_level", "learner", "completion"),
+                 predict.reserve_tree = c("newdata", "type", "completion", "R", "seed"),
+                 ibnr_reserve = c("counts", "projection", "round"),
+                 summary.reserve_prediction = c("probs", "type"),
+                 backtest = c("probs", "type", "rep_year", "reference", "reference_component", "observed_to"),
+                 chain_ladder = c("input", "projection"),
+                 two_part_learner = c("occurrence", "size", "min_nonzero"))
+show_arg <- function(f, a) {
+  fm <- formals(get(f, envir = ns))
+  if (!a %in% names(fm)) return(sprintf("\\textbf{[%s: no argument %s]}", gsub("_", "\\\\_", f), gsub("_", "\\\\_", a)))
+  v <- if (is.character(fm[[a]])) deparse(fm[[a]]) else as.character(fm[a])   # "" without a default; strings quoted
+  txt <- if (!nzchar(v)) a else paste(a, "=", v)
+  paste0("\\code{", gsub("_", "\\\\_", txt), "}")
+}
+label_of <- c(predict.reserve_tree = "predict()} on a \\class{reserve\\_tree", summary.reserve_prediction = "summary()} on a \\class{reserve\\_prediction")
+rows <- vapply(names(key_args), function(f) {
+  nm <- if (f %in% names(label_of)) paste0("\\code{", label_of[[f]], "}") else paste0("\\fct{", gsub("_", "\\\\_", f), "}")
+  paste0(nm, " & ", paste(vapply(key_args[[f]], function(a) show_arg(f, a), ""), collapse = ", "), " \\\\")
+}, "")
+cat("\\begin{table}[t!]\n\\centering\n\\footnotesize\n\\begin{tabular}{@{}>{\\raggedright\\arraybackslash}p{3.4cm}>{\\raggedright\\arraybackslash}p{10.9cm}@{}}\n\\toprule\nFunction & Key arguments and their defaults \\\\\n\\midrule\n")
+cat(rows, sep = "\n")
+cat(sprintf("\\bottomrule\n\\end{tabular}\n\\caption{Key arguments of the main functions with their defaults, read from \\pkg{baggingReserve} %s (an argument without a default must be supplied; for a vector of choices, the first is the default). \\code{predict()} on a \\class{bag\\_reserve} takes only \\code{newdata} and \\code{type}: its completion is that of \\fct{bag\\_reserve}. The column names of \\fct{backtest}, \\code{rep\\_year} among them, default to those given to the prediction's \\fct{claims\\_panel}.}\n\\label{tab:defaults}\n\\end{table}\n", packageVersion("baggingReserve")))
+@
+
+
+%% =============================================================================
+\section{Illustration} \label{sec:illustration}
+
+\subsection{The data contract on a toy portfolio} \label{sec:toy}
+
+Five claims and six transactions illustrate the rules. Claim \code{d} is reported after the
+valuation date $t = 3$ and is not part of the panel; claim \code{a} has two payments in year 1
+and a recovery in year 2; claim \code{b} is reported one year after its accident, so its cell
+for development year 0 is an observed zero; claim \code{e} is reported but has no payment yet;
+the cell for development year 2 of claim \code{c} lies in the future.
+%
+<<toy>>=
+library("baggingReserve")
+claims <- data.frame(Id = c("a", "b", "c", "d", "e"),
+  AccYear = c(1, 1, 2, 3, 3), RepYear = c(1, 2, 2, 4, 3),
+  Type = c("x", "y", "x", "y", "x"))
+payments <- data.frame(Id = c("a", "a", "a", "b", "c", "d"),
+  EventYear = c(1, 1, 2, 2, 3, 4), Paid = c(10, 5, -2, 7, 3, 1))
+panel <- claims_panel(claims, payments, t = 3, L = 2, features = "Type")
+panel
+cbind(panel$claims, panel$payments)
+as_triangle(panel)
+@
+%
+A payment after the valuation date triggers an error unless it is dropped explicitly:
+%
+<<toy-error, error=TRUE>>=
+late <- rbind(payments, data.frame(Id = "a", EventYear = 4, Paid = 9))
+msg <- tryCatch(claims_panel(claims, late, t = 3, L = 2, features = "Type"),
+                error = conditionMessage)
+writeLines(strwrap(msg, width = 70))
+claims_panel(claims, late, t = 3, L = 2, features = "Type",
+             future_payments = "drop")$diagnostics$future_amount_dropped
+@
+
+\subsection{The shipped synthetic portfolio} \label{sec:portfolio}
+
+The package ships a synthetic portfolio from the simulator of \citet{Wang+Wuthrich:2022}, built
+on \pkg{SynthETIC} and run on a yearly grid with seed 2026: six claim types, twelve accident
+years, valuation at $t = 12$, horizon $L = 11$. It is a fresh portfolio from the simulator used
+by the source article, not the source article's own, so the numbers below do not attempt to
+reproduce that article's. \code{synthetic\_claims} and \code{synthetic\_payments} hold what the
+insurer knows at the valuation date; \code{synthetic\_claims\_full} and
+\code{synthetic\_payments\_full} add the generated ultimate amounts and the payments after the
+valuation date, for back-testing. The trees see the type, the age, the weekday of the accident
+and the reporting delay, together with the payment history; the ultimate claim size, which
+drives the payments, is withheld. The generator violates the model of Section~\ref{sec:method}
+in several ways (inflation, a drifting settlement delay, a claim-size cycle in the accident
+date, and late-reported claims that are smaller on average), and on the yearly grid its calendar
+conversion still treats a time unit as a month, which leaves artefacts in the weekday feature and
+the reporting delay; the back-tests below therefore measure the method under misspecification
+(\supp{1} describes the generator and these mechanisms).
+%
+<<data>>=
+data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
+panel <- claims_panel(synthetic_claims, synthetic_payments, t = 12, L = 11,
+                      features = c("Type", "Age", "AccWeekday"))
+panel
+@
+%
+<<delay-columns, echo=FALSE>>=
+cnt_cols <- which(colSums(claim_counts(panel), na.rm = TRUE) > 0) - 1L
+empty_delays <- setdiff(0:max(panel$claims$rep_delay), cnt_cols)
+empty_note <- if (length(empty_delays)) sprintf(" (the column for delay %s is empty)", paste(empty_delays, collapse = ", ")) else ""
+@
+In the triangle of reporting counts, \code{claim\_counts(panel)}, the reporting delay runs from 0 to \Sexpr{max(panel$claims$rep_delay)} years:
+of the \Sexpr{max(panel$claims$rep_delay) + 1L} delay columns in that range, \Sexpr{length(cnt_cols)} contain
+claims\Sexpr{empty_note}; \Sexpr{fmt(panel$diagnostics$n_claims_without_payment)} reported
+claims have no payment yet and \Sexpr{panel$diagnostics$n_recoveries} of the transactions are
+recoveries. Fitting one pruned tree per development year takes less than a minute:
+%
+<<tree>>=
+tree <- reserve_tree(panel, seed = 1)
+tree
+res_tree <- ibnr_reserve(predict(tree), claim_counts(panel))
+calendar_year_payments(res_tree, "total")[c("13", "total"), ]
+@
+%
+<<roots, echo=FALSE, results="asis">>=
+leaves <- vapply(tree$fits, function(f) sum(f$frame$var == "<leaf>"), 1L)
+roots <- which(leaves == 1L) - 1L
+and_list <- function(x) if (length(x) > 1) paste0(paste(x[-length(x)], collapse = ", "), " and ", x[length(x)]) else as.character(x)
+if (length(roots)) cat(sprintf("The tree%s of period%s %s %s pruned to %s root node%s: the response is mostly zero and no split survives cross-validation, so %s predict%s the training mean for every claim.\n",
+  if (length(roots) > 1) "s" else "", if (length(roots) > 1) "s" else "", and_list(roots), if (length(roots) > 1) "are" else "is",
+  if (length(roots) > 1) "their" else "its", if (length(roots) > 1) "s" else "",
+  if (length(roots) > 1) "these trees" else "this tree", if (length(roots) > 1) "" else "s"))
+@
+
+A bagged fit with 50 replicates takes a few minutes on two worker processes:
+<<bag-small, eval=have_live>>=
+bag <- bag_reserve(panel, B = 50, seed = 2026, ncores = 2)
+res50 <- ibnr_reserve(predict(bag))
+summary(claim_reserves(res50)$reserve)
+@
+The last line summarises the reserves of the individual reported claims. The replication script
+makes the same call with $B = \Sexpr{B_live_txt}$ replicates and 8 worker processes. Replicate
+$b$ always uses random-number stream $b$ (Section~\ref{sec:storage}), so the first 50 of those
+replicates are the ones just computed; the next chunk reads that deposit, which is part of the
+replication material (\code{results/live/}), not of the package:
+<<live-check, echo=FALSE, results="asis">>=
+if (!have_live) cat("\\textbf{[The live deposit results/live/ is missing; run paper/replication/run\\_all.R.]}\n")
+@
+<<live-print, eval=have_live>>=
+res <- readRDS("results/live/reserve_prediction_live.rds")
+c(reported = all.equal(res50$reported, res$reported[, 1:50]),
+  ibnr = all.equal(res50$ibnr, res$ibnr[, 1:50]))
+smry <- summary(res, probs = c(0.025, 0.5, 0.975))
+round(smry$tables$total[c("13", "total"), c("mean", "sd", "q2.5%", "q97.5%")])
+@
+%
+<<live-timing, echo=FALSE, results="asis">>=
+if (have_live) { oob <- readRDS("results/live/bagging_live.rds")$oob   # the out-of-bag table of the deposit
+  stopifnot(all(oob$coverage == 1)) }   # "every training claim receives out-of-bag predictions"
+@
+Every training claim receives out-of-bag predictions (the deposit holds the out-of-bag table). The out-of-bag scores are low, between
+$\Sexpr{if (have_live) formatC(min(oob$oob_score), format = "f", digits = 2) else "?"}$ and
+$\Sexpr{if (have_live) formatC(max(oob$oob_score), format = "f", digits = 2) else "?"}$, and
+negative in the later development years: the one-year regressions explain little of the
+variance of next year's payment given the history. The predicted
+payments of the last calendar years are small and can be negative, because a few recoveries
+make the training mean of a late tree negative (\supp{2}).
+
+The uncensored data allow a back-test against the payments that actually followed;
+Figure~\ref{fig:calendar} shows the predicted payments by calendar year alongside the realised
+payments, and Table~\ref{tab:bench} summarises the point predictions:
+%
+<<backtest-fit, eval=have_live, together=TRUE>>=
+data("synthetic_claims_full", "synthetic_payments_full",
+  package = "baggingReserve")
+bt <- backtest(res, synthetic_claims_full, synthetic_payments_full)
+d <- as.data.frame(bt)
+d <- d[d$calendar %in% c("13", "total"), ]
+transform(d[, c("component", "calendar", "truth", "predicted")],
+  truth = round(truth), predicted = round(predicted),
+  rel_error = round(d$rel_error, 3))
+@
+<<truth-cal, eval=have_live, echo=FALSE>>=
+truth_cal <- setNames(bt$tables$total$truth, bt$tables$total$calendar)
+@
+
+<<calendar, eval=have_live, echo=FALSE, fig.width=7, fig.height=3.2, out.width="0.6\\textwidth", fig.cap=paste0("Predicted payments per future calendar year for all claims: the mean over the $B = ", B_live_txt, "$ replicates (line and dots), the shaded interval between the 2.5\\% and 97.5\\% replicate quantiles (type 7; resampling variation only) and the realised payments (crosses).")>>=
+plot(res, "calendar", truth = truth_cal, main = "")
+@
+
+<<bench, eval=have_live, echo=FALSE, results="asis">>=
+bench <- read.csv("results/live/table_benchmarks.csv", check.names = FALSE); bench_raw <- bench
+bench$next_year_rel_error <- pct(bench$next_year_rel_error); bench$ultimate_rel_error <- pct(bench$ultimate_rel_error)
+bench <- bench[, c("method", "next_year", "next_year_rel_error", "ultimate", "ultimate_rel_error")]
+bench$method <- sentence(bench$method)
+names(bench) <- c("Method", "Payments", "Rel. error", "Payments", "Rel. error")
+cat("\\begin{table}[t!]\n\\centering\n\\small\n")
+latex_table_grouped(bench, groups = list(list(label = "Next year", span = 2L), list(label = "Through development year 11", span = 2L)),
+                    sub = c("Payments", "Rel. error", "Payments", "Rel. error"), align = "lrrrr")
+cat(sprintf("\\caption{Predicted payments for all claims in the next year (calendar year 13) and in all future years through development year 11, and their relative errors with respect to the realised payments: the single-tree fit, the bagged mean over $B = %d$ replicates (plug-in completion, the default) and the standard chain ladder on the paid triangle.}\n\\label{tab:bench}\n\\end{table}\n", res$B))
+@
+
+<<components, eval=have_live, echo=FALSE>>=
+n_tot <- nrow(bt$tables$total)
+rep1 <- bt$tables$reported[1, ]; ibnr1 <- bt$tables$ibnr[1, ]; tot1 <- bt$tables$total[1, ]
+repT <- bt$tables$reported[n_tot, ]; ibnrT <- bt$tables$ibnr[n_tot, ]; totT <- bt$tables$total[n_tot, ]
+where_total <- if (totT$truth < totT$lower) "below the 2.5\\% replicate quantile" else
+  if (totT$truth > totT$upper) "above the 97.5\\% replicate quantile" else "between the 2.5\\% and 97.5\\% replicate quantiles"
+cy_res <- calendar_year_payments(res, "total")
+@
+<<by-ay, eval=have_live, echo=FALSE>>=
+# all future payments through development year L by accident year: realised, bagged mean, chain ladder
+# (the table is in the supplement, Section S2)
+pf <- synthetic_payments_full; cf <- synthetic_claims_full
+pay_ay <- cf$AccYear[match(pf$Id, cf$Id)]; dev <- pf$EventYear - pay_ay
+fut <- pf$EventYear > res$t & dev <= res$L
+ays <- sort(unique(res$cells$acc_year))
+truth_ay <- tapply(pf$Paid[fut], factor(pay_ay[fut], levels = ays), sum)
+bag_ay <- tapply(rowMeans(res$reported + res$ibnr), factor(res$cells$acc_year, levels = ays), sum)
+cl_live <- readRDS("results/live/chain_ladder.rds"); cl_ay <- cl_live$outstanding[as.character(ays)]
+stopifnot(isTRUE(all.equal(sum(truth_ay), totT$truth)), isTRUE(all.equal(sum(bag_ay), totT$predicted)))
+tr <- as.numeric(truth_ay); sae_bag <- sum(abs(as.numeric(bag_ay) - tr)); sae_cl <- sum(abs(as.numeric(cl_ay) - tr))
+n_closer <- sum(abs(as.numeric(bag_ay) - tr) < abs(as.numeric(cl_ay) - tr))
+stopifnot(sae_bag > sae_cl, abs(totT$rel_error) < abs(bench_raw$ultimate_rel_error[bench_raw$method == "chain ladder"]))
+@
+The back-test holds one table per component (all of it is printed in \supp{2}). Next year's
+total is \Sexpr{signed(tot1$rel_error)}; payments for reported claims are
+\Sexpr{signed(rep1$rel_error)} and payments for IBNR claims
+\Sexpr{signed(ibnr1$rel_error)}\Sexpr{net_of(rep1$error, ibnr1$error)}. The total through
+development year 11 is \Sexpr{signed(totT$rel_error)} (reported-claim payments
+\Sexpr{signed(repT$rel_error)}, IBNR payments \Sexpr{signed(ibnrT$rel_error)}). The realised
+total lies \Sexpr{where_total}\Sexpr{if (totT$truth >= totT$lower && totT$truth <= totT$upper) ", " else "; the 2.5\\% and 97.5\\% replicate quantiles are "}\Sexpr{fmt(totT$lower)}
+and \Sexpr{fmt(totT$upper)}. Next year's realised payments, \Sexpr{fmt(tot1$truth)},
+\Sexpr{if (tot1$truth > max(cy_res[1, ])) "exceed all" else if (tot1$truth < min(cy_res[1, ])) "fall below all" else "lie within the range of the"}
+\Sexpr{res$B} replicate predictions, which range from \Sexpr{fmt(min(cy_res[1, ]))} to
+\Sexpr{fmt(max(cy_res[1, ]))}: the replicate spread measures resampling variation, not forecast
+error (Section~\ref{sec:bagging}). The chain ladder's next-year absolute relative error of
+\Sexpr{pct(abs(bench_raw$next_year_rel_error[bench_raw$method == "chain ladder"]))} is smaller
+than the bagged mean's \Sexpr{pct(abs(tot1$rel_error))}; for the total through development year
+11 the bagged mean is closer, but by offsetting errors across accident years: it is closer than
+the chain ladder for \Sexpr{n_closer} of the \Sexpr{length(ays)} accident years, and summed in
+absolute value over the accident years its errors amount to \Sexpr{fmt(sae_bag)}, against
+\Sexpr{fmt(sae_cl)} for the chain ladder (\supp{2} gives the breakdown); a back-test should look
+at it as well as at the total. Nor does its small error for the total, against the single-tree fit's
+\Sexpr{pct(abs(bench_raw$ultimate_rel_error[bench_raw$method == "single tree"]))}, show that
+averaging corrects the single tree: the fits differ in pruning as well, and on every further
+generator portfolio the bagged mean overpredicts the total by more (\supp{4}).
+
+<<ibnr-counts, eval=have_live, echo=FALSE, results="asis">>=
+# The IBNR error split into the error of the projected counts and that of the payment per
+# late-reported claim: results/live/ibnr_counts.csv (acc_year, projected, realised) holds the
+# chain-ladder projection of the claims reported after t and the claims actually reported later.
+ic_file <- "results/live/ibnr_counts.csv"
+if (!file.exists(ic_file)) {
+  cat("The IBNR component is the product of projected counts and a pooled mean payment, so its error has two sources: the count projection and the payment per late-reported claim.", missing_txt(ic_file), "\n\n")
+} else {
+  ic <- read.csv(ic_file, stringsAsFactors = FALSE); stopifnot(all(c("acc_year", "projected", "realised") %in% names(ic)))
+  ic <- ic[ic$acc_year != "total", ]; ic$acc_year <- as.integer(ic$acc_year)   # accident years only, without the total row
+  e_cnt <- sum(ic$projected) / sum(ic$realised) - 1
+  e_sev <- (1 + ibnrT$rel_error) / (1 + e_cnt) - 1           # through development year L
+  ic_last <- ic[which.max(ic$acc_year), ]
+  cat(sprintf("The IBNR component is the product of projected counts and a pooled mean payment, so its error has two sources. The chain ladder on the reporting counts projects %s claims to be reported after the valuation date, against %s actually reported later, so the counts are %s; given this count error, the IBNR payments through development year 11, %s, imply that the payment per late-reported claim is %s ($(1 + e_I)/(1 + e_N) - 1$, with $e_I$ and $e_N$ the relative errors of the payments and of the counts), the error of the pooled mean of Equation~\\eqref{eq:mu} on a generator whose late-reported claims are smaller (\\supp{1}).\n\n",
+    fmt(sum(ic$projected)), fmt(sum(ic$realised)), signed(e_cnt), signed(ibnrT$rel_error), signed(e_sev)))
+}
+@
+
+For totals we recommend simulated completion (Section~\ref{sec:learners}); the call differs in one
+argument, here with the same 50 replicates as above:
+<<bag-draw, eval=have_live, together=TRUE>>=
+bag_draw <- bag_reserve(panel, B = 50, seed = 2026, ncores = 2,
+  completion = "draw")
+bt_draw <- backtest(ibnr_reserve(predict(bag_draw)),
+  synthetic_claims_full, synthetic_payments_full)
+d_draw <- bt_draw$tables$total[c(1, nrow(bt_draw$tables$total)), ]
+@
+<<bag-draw-text, eval=have_live, echo=FALSE>>=
+draw_cmp <- if (d_draw$rel_error[2] < 0 && totT$rel_error > 0) "turns the overprediction of the plug-in total into an underprediction" else
+  if (abs(d_draw$rel_error[2]) < abs(totT$rel_error)) "reduces the error of the plug-in total" else "does not reduce the error of the plug-in total"
+@
+On this misspecified portfolio simulated completion \Sexpr{draw_cmp} (\Sexpr{signed(d_draw$rel_error[2])}, against
+\Sexpr{signed(totT$rel_error)} with plugged-in means and $B = \Sexpr{res$B}$; \supp{7}); on a
+correctly specified generator it removes the bias of the plug-in recursion
+(Section~\ref{sec:well-specified}).
+
+\subsection{Back-testing at earlier valuation dates} \label{sec:revalue}
+
+A user's own data have no realised future, but they can be back-tested by valuing them at an
+earlier date: the claims of the accident years up to the new valuation date are kept, the
+constructor keeps only those reported by \code{t}, \code{future\_payments = "drop"} sets aside
+the payments after \code{t}, which then serve as the truth, and the argument \code{reference} of
+\fct{backtest} scores the chain ladder against the same truth. On the shipped portfolio, valued
+one year earlier:
+<<revalue>>=
+cl11 <- synthetic_claims_full[synthetic_claims_full$AccYear <= 11, ]
+pay11 <- synthetic_payments_full[synthetic_payments_full$Id %in% cl11$Id, ]
+panel11 <- claims_panel(cl11, pay11, t = 11, L = 10,
+  features = c("Type", "Age", "AccWeekday"), future_payments = "drop")
+bt11 <- backtest(ibnr_reserve(predict(reserve_tree(panel11, seed = 1))),
+  cl11, pay11, reference = chain_ladder(as_triangle(panel11)))
+d11 <- as.data.frame(bt11)
+d11 <- d11[d11$component == "total" & d11$calendar %in% c("12", "total"), ]
+print(data.frame(calendar = d11$calendar, realised = round(d11$truth),
+  tree = round(d11$predicted), chain_ladder = round(d11$reference)),
+  row.names = FALSE)
+@
+<<revalue-check, echo=FALSE>>=
+# the displayed workflow gives the single-tree numbers of the deposit of replication/valuation_t11.R
+if (file.exists("results/t11/table_benchmarks.csv")) {
+  tb11_chk <- read.csv("results/t11/table_benchmarks.csv")
+  stopifnot(isTRUE(all.equal(d11$predicted, unlist(tb11_chk[tb11_chk$method == "single tree", c("next_year", "ultimate")]), check.attributes = FALSE)),
+            isTRUE(all.equal(d11$reference, unlist(tb11_chk[tb11_chk$method == "chain ladder", c("next_year", "ultimate")]), check.attributes = FALSE)))
+}
+@
+<<t11, eval=file.exists("results/t11/table_benchmarks.csv"), echo=FALSE, results="asis">>=
+tb11 <- read.csv("results/t11/table_benchmarks.csv"); tc11 <- read.csv("results/t11/table_components.csv")
+rownames(tc11) <- tc11$component
+ri11 <- read.csv("results/t11/run_info.csv"); r11 <- setNames(ri11$value, ri11$quantity)
+rel11 <- function(m, h) tb11[[paste0(h, "_rel_error")]][tb11$method == m]
+best11 <- function(h) { e <- c(`the bagged mean` = abs(rel11("bagging (mean)", h)), `the single-tree fit` = abs(rel11("single tree", h)),
+                                `the chain ladder` = abs(rel11("chain ladder", h))); names(e)[which.min(e)] }
+cat(sprintf("With $L = %d$, the largest horizon with training claims for its last tree, the script \\code{replication/\\allowbreak valuation\\_t11.R} adds the bagged fit ($B = %d$): next year's payments are %s by the bagged mean, %s by the single-tree fit and %s by the chain ladder, and the total through development year %d is %s, %s and %s, respectively. %s\n\n",
+  as.integer(r11[["L"]]), as.integer(r11[["B"]]),
+  signed(rel11("bagging (mean)", "next_year")), signed(rel11("single tree", "next_year")), signed(rel11("chain ladder", "next_year")),
+  as.integer(r11[["L"]]),
+  signed(rel11("bagging (mean)", "ultimate")), signed(rel11("single tree", "ultimate")), signed(rel11("chain ladder", "ultimate")),
+  if (best11("next_year") == best11("ultimate")) sprintf("The closest predictor is %s at both horizons.", best11("ultimate")) else sprintf("The closest predictor is %s for next year and %s for the total.", best11("next_year"), best11("ultimate"))))
+@
+<<rolling, eval=have_rev && file.exists(file.path(rev_dir, "rolling_backtests.csv")), echo=FALSE, results="asis">>=
+rl <- read.csv(file.path(rev_dir, "rolling_backtests.csv")); rcf <- read.csv(file.path(rev_dir, "config.csv"))
+roll_B <- as.integer(rcf$value[rcf$key == "ROLL_B"])
+mae <- function(v) pct(mean(abs(v))); smean <- function(v) { m <- mean(v); paste0(if (m < 0) "$-$" else "", pct(abs(m))) }
+# the realised value relative to the bagged mean, compared with the replicate quantiles relative to it
+inside <- function(e, lo, hi) { r <- 1 / (1 + e) - 1; r >= lo & r <= hi }
+in_next <- sum(inside(rl$bag_next_rel, rl$bag_next_q_lo, rl$bag_next_q_hi))
+in_tot <- sum(inside(rl$bag_total_rel, rl$bag_total_q_lo, rl$bag_total_q_hi))
+cat(sprintf("Repeated at several valuation dates, the same workflow gives an empirical distribution of the prediction errors, which the replicate quantiles cannot. The script \\code{replication/\\allowbreak revision\\_studies.R} back-tests the single-tree fit, a bagged fit with $B = %d$ replicates and the chain ladder at $t = %d, \\ldots, %d$, each with horizon $L = t - 1$ (\\supp{2} tabulates the errors). Over the %d valuation dates the mean absolute relative error of the total is %s for the bagged mean, %s for the single-tree fit and %s for the chain ladder (Table~\\ref{tab:evaluation})%s. The dates share claims and payments, and the horizon changes with $t$, so these errors are dependent and descriptive. The 2.5\\%% to 97.5\\%% replicate range of the bagged fit contains the realised payments at %d of the %d dates next year and %d for the total.",
+  roll_B, min(rl$t), max(rl$t), nrow(rl), mae(rl$bag_total_rel), mae(rl$tree_total_rel), mae(rl$cl_total_rel),
+  if (all(rl$bag_total_rel > 0)) "; the bagged mean overpredicts the total at every date" else "", in_next, nrow(rl), in_tot))
+if ("draw_total_inside" %in% names(rl)) {
+  stopifnot(abs(mean(rl$draw_total_rel)) < mean(rl$bag_total_rel) / 2, any(rl$draw_total_rel < 0), any(rl$draw_total_rel > 0))   # the prose
+  cat(sprintf(" Simulated completion on the same trees removes most of the systematic overprediction (mean signed error of the total %s, against %s), but the errors of single dates remain large and of either sign.\n\n",
+    smean(rl$draw_total_rel), smean(rl$bag_total_rel)))
+} else cat("\n\n")
+@
+
+\subsection{An illustrative motor third-party liability dataset} \label{sec:mtpl}
+
+A dataset from insurance practice shows how the software handles transaction-level data: the
+motor third-party liability (MTPL) claims published in a public code repository
+\citep{rfpipeline}, an illustrative subset of an insurer's data drawn in an undocumented way
+(shipped with the replication material under its MIT licence), with one row per payment
+transaction (claim identifier, claim type, accident, reporting and payment dates, amount).
+We take accident years 2000 to 2009, value the claims at the end of 2009 with $L = 9$ and use the
+claim type and the accident month as features; the extract ends in 2019, so every predicted cell
+has its realised value. The script \code{replication/\allowbreak mtpl\_case.R} runs the workflow of
+Section~\ref{sec:portfolio} on it (\supp{8} shows the calls).
+<<mtpl-check, echo=FALSE, results="asis">>=
+if (!have_mtpl) cat("\\textbf{[The MTPL deposit results/mtpl/ is missing; run paper/replication/mtpl\\_case.R.]}\n")
+@
+<<mtpl-numbers, eval=have_mtpl, echo=FALSE>>=
+md <- read.csv(file.path(mtpl_dir, "data_summary.csv")); mv <- setNames(md$value, md$quantity)
+mt <- read.csv(file.path(mtpl_dir, "claim_types.csv"))
+mb <- read.csv(file.path(mtpl_dir, "table_benchmarks.csv"), check.names = FALSE)
+mc <- read.csv(file.path(mtpl_dir, "table_components.csv")); rownames(mc) <- mc$component
+mo <- read.csv(file.path(mtpl_dir, "table_oob.csv"))
+mtc <- read.csv(file.path(mtpl_dir, "tree_cp.csv"))
+mfit <- readRDS(file.path(mtpl_dir, "mtpl_fit.rds"))
+mpd <- read.csv(file.path(mtpl_dir, "panel_diagnostics.csv"))
+share_of <- function(type) mt$share[mt$Type == type]
+mroots <- mtc$period[mtc$leaves == 1]
+mrel <- function(m, h) mb[[paste0(h, "_rel_error")]][mb$method == m]
+verb <- function(e) if (e < 0) paste("underpredicts by", pct(-e)) else paste("overpredicts by", pct(e))
+verb2 <- function(e1, e2) if (sign(e1) == sign(e2)) paste(if (e1 < 0) "underpredicts by" else "overpredicts by", pct(abs(e1)), "and", paste0(pct(abs(e2)), ", respectively")) else paste(verb(e1), "and", verb(e2))
+mtail <- mv[["amount, dev > L"]] / mv[["amount after t, dev <= L"]]   # tail beyond L relative to the reserve target
+@
+
+<<mtpl-short, eval=have_mtpl, echo=FALSE, results="asis">>=
+mr_file <- "results/mtpl_rolling/table_rolling.csv"; have_mr <- file.exists(mr_file)
+cat(sprintf("The extract has no claims register, so the claims table is reconstructed from the transactions through %d: %s of the %s claims reported by 2009 that have no transaction by then are in the data only because they transact later, and the claim type may have been assigned after $t$. The trees and the IBNR counts are thus conditioned on information from after $t$ (\\supp{8}), and the results illustrate the software, not the accuracy of the method. ",
+  as.integer(mv[["max payment year"]]), fmt(mpd$n_claims_without_payment), fmt(mpd$n_reported)))
+cat(sprintf("Its results are in Table~\\ref{tab:evaluation} and \\supp{8}. The IBNR component %s through development year 9: a claim reported after the valuation date goes on to pay %s on average, against %s for a claim reported by then, a difference the pooled mean payment of Equation~\\eqref{eq:mu} cannot reflect.",
+  verb(mc["ibnr", "total_rel_error"]),
+  fmt(mc["ibnr", "total_truth"] / mv[["reported after t (IBNR)"]]), fmt(mc["reported", "total_truth"] / mv[["reported by t"]])))
+if (have_mr) {
+  mr <- read.csv(mr_file); mts <- sort(unique(mr$t))
+  tot <- function(m) mr$total_rel[mr$method == m]
+  plug <- tot("bagged mean"); sim <- tot("bagged mean, simulated completion")
+  stopifnot(all(plug < 0), all(sim > plug))   # the prose: underprediction at every date, raised by simulation
+  cat(sprintf(" At the %d valuation dates %d to %d (\\supp{8}, Table~\\ref{tab:evaluation}) the plug-in bagged mean underpredicts the total at every date and simulated completion raises it at every date: the plug-in recursion errs downwards here, upwards on the generator.\n\n",
+    length(mts), min(mts), max(mts)))
+} else cat("\n\n")
+@
+
+\subsection{What the back-tests show} \label{sec:evaluation}
+
+<<evaluation, echo=FALSE, results="asis">>=
+ev_files <- c(robust_file, file.path(rev_dir, "rolling_backtests.csv"), "results/mix_shift/table_benchmarks.csv")
+if (!(have_live && have_mtpl && all(file.exists(ev_files)))) {
+  cat(missing_txt("results/robustness, revision, mix_shift, mtpl or live"), "\n\n")
+  ev_ok <- FALSE
+} else {
+  ev_ok <- TRUE
+  smean <- function(v) { m <- mean(v); paste0(if (m < 0) "$-$" else "", pct(abs(m))) }   # a signed mean error
+  bl <- read.csv("results/live/table_benchmarks.csv", check.names = FALSE)
+  six <- function(tab, mcol, names_map, nx, tt) {   # one row of the six relative errors
+    g <- function(m, col) tab[[col]][tab[[mcol]] == m]
+    data.frame(tree_next = g(names_map[1], nx), tree_total = g(names_map[1], tt), bag_next = g(names_map[2], nx),
+               bag_total = g(names_map[2], tt), cl_next = g(names_map[3], nx), cl_total = g(names_map[3], tt))
+  }
+  std <- c("single tree", "bagging (mean)", "chain ladder")
+  ev_ship <- six(bl, "method", std, "next_year_rel_error", "ultimate_rel_error")
+  rb <- read.csv(robust_file)
+  ev_nine <- rbind(ev_ship, data.frame(tree_next = rb$tree_next_rel, tree_total = rb$tree_total_rel, bag_next = rb$bag_next_rel,
+                                       bag_total = rb$bag_total_rel, cl_next = rb$cl_next_rel, cl_total = rb$cl_total_rel))
+  rl <- read.csv(file.path(rev_dir, "rolling_backtests.csv"))
+  ev_roll <- data.frame(tree_next = rl$tree_next_rel, tree_total = rl$tree_total_rel, bag_next = rl$bag_next_rel,
+                        bag_total = rl$bag_total_rel, cl_next = rl$cl_next_rel, cl_total = rl$cl_total_rel)
+  mixb <- read.csv("results/mix_shift/table_benchmarks.csv")
+  ev_mix <- do.call(rbind, lapply(split(mixb, mixb$seed), six, mcol = "method", names_map = std, nx = "next_rel_error", tt = "total_rel_error"))
+  mbm <- read.csv(file.path(mtpl_dir, "table_benchmarks.csv"))
+  ev_mtpl <- six(mbm, "method", std, "next_year_rel_error", "ultimate_rel_error")
+  # simulated completion of the bagged mean, where a deposit has it (NULL elsewhere)
+  bdd <- read.csv(file.path(rev_dir, "bagging_draw.csv")); bdd <- bdd[bdd$completion == "draw" & bdd$component == "total", ]
+  bagdraw_B <- as.integer(read.csv(file.path(rev_dir, "config.csv"))$value[read.csv(file.path(rev_dir, "config.csv"))$key == "BAGDRAW_B"])
+  sim_ship <- data.frame(sim_next = bdd$next_mean / bdd$next_truth - 1, sim_total = bdd$total_mean / bdd$total_truth - 1)
+  sim_roll <- if ("draw_total_rel" %in% names(rl)) data.frame(sim_next = rl$draw_next_rel, sim_total = rl$draw_total_rel)
+  dag <- "$^\\dagger$"   # rows that are not clean back-tests (the motor claims table)
+  studies <- list(list("Shipped, $t = 12$", ev_ship, sim_ship, FALSE), list(sprintf("Shipped, $t = %d$--$%d$", min(rl$t), max(rl$t)), ev_roll, sim_roll, TRUE),
+                  list("Generator", ev_nine, NULL, TRUE), list("Changing mix", ev_mix, NULL, TRUE), list(paste0("Motor, $t = 2009$", dag), ev_mtpl, NULL, TRUE))
+  mr_file <- "results/mtpl_rolling/table_rolling.csv"
+  if (file.exists(mr_file)) {
+    mr <- read.csv(mr_file)
+    ev_mr <- do.call(rbind, lapply(split(mr, mr$t), six, mcol = "method", names_map = c("single tree", "bagged mean", "chain ladder"), nx = "next_rel", tt = "total_rel"))
+    sim_m <- function(d) data.frame(sim_next = d$next_rel[d$method == "bagged mean, simulated completion"], sim_total = d$total_rel[d$method == "bagged mean, simulated completion"])
+    sim_mr <- do.call(rbind, lapply(split(mr, mr$t), sim_m))
+    # the case at 2009 is the date 2009 of the rolling study (same fit): it then contributes its simulated completion,
+    # and only the four dates count as a study of their own
+    m09 <- mr[mr$t == 2009, ]
+    if (nrow(m09) && isTRUE(all.equal(unname(unlist(ev_mtpl)), unname(unlist(six(m09, "method", c("single tree", "bagged mean", "chain ladder"), "next_rel", "total_rel")))))) {
+      studies[[5]][[3]] <- sim_m(m09); studies[[5]][[4]] <- FALSE
+    }
+    studies[[length(studies) + 1L]] <- list(sprintf("Motor, %d dates%s", nrow(ev_mr), dag), ev_mr, sim_mr, TRUE)
+  }
+  ev_tab <- do.call(rbind, lapply(studies, function(s) {
+    e <- s[[2]]; a <- colMeans(abs(e)); sm <- if (is.null(s[[3]])) c(sim_next = NA, sim_total = NA) else colMeans(abs(s[[3]]))
+    sp <- function(x) if (is.na(x)) "--" else pct(x)
+    data.frame(study = s[[1]], n = as.character(nrow(e)),
+               t1 = pct(a[["tree_next"]]), b1 = pct(a[["bag_next"]]), s1 = sp(sm[["sim_next"]]), c1 = pct(a[["cl_next"]]),
+               t2 = pct(a[["tree_total"]]), b2 = pct(a[["bag_total"]]), s2 = sp(sm[["sim_total"]]), c2 = pct(a[["cl_total"]]),
+               k = sprintf("%d, %d", sum(abs(e$cl_next) < abs(e$bag_next)), sum(abs(e$cl_total) < abs(e$bag_total))))
+  }))
+  cat("\\begin{table}[t!]\n\\centering\n\\small\n\\setlength{\\tabcolsep}{4.5pt}\n")
+  latex_table_grouped(ev_tab, groups = list(list(label = "Next year", span = 4L), list(label = "Through development year $L$", span = 4L),
+                                            list(label = "CL closer", span = 1L)),
+                      sub = c("Tree", "Bagged", "Sim.", "CL", "Tree", "Bagged", "Sim.", "CL", "next, total"), first = "Back-test & $n$", lead = 2L, align = "llrrrrrrrrr")
+  distinct <- vapply(studies, `[[`, TRUE, 4L)
+  cat(sprintf("\\caption{Summary of the back-tests: mean absolute relative error of the single-tree fit, the bagged mean with the default plug-in completion (Bagged) and with simulated completion (Sim., where deposited; for the shipped portfolio at $t = 12$ with $B = %d$) and the chain ladder (CL) for all claims, over the $n$ portfolios or valuation dates of each study, and the number of them on which the chain ladder is closer than the plug-in bagged mean (CL closer). Generator: the shipped portfolio and %d further ones (\\supp{4}); changing mix: \\supp{6}; shipped, $t = 7$ to $11$: Section~\\ref{sec:revalue} and \\supp{2}; motor: Section~\\ref{sec:mtpl} and \\supp{8}. %sNot clean back-tests: the motor claims table is reconstructed from transactions after the valuation date. The shipped portfolio at $t = 12$ is one of the generator portfolios%s, and the valuation dates of one portfolio share claims and payments, so the rows are not independent; the means are descriptive. They are computed from unrounded values.}\n\\label{tab:evaluation}\n\\end{table}\n",
+              bagdraw_B, nrow(rb), dag, if (sum(distinct) < length(studies) - 1L) " and the motor case at $t = 2009$ one of the motor dates" else ""))
+
+  # --- the findings stated in the prose: counted over the distinct studies only ---
+  ev_mae <- lapply(studies[distinct], function(x) colMeans(abs(x[[2]])))
+  best_of <- function(a) c((a[["cl_next"]] < min(a[["tree_next"]], a[["bag_next"]])), (a[["cl_total"]] < min(a[["tree_total"]], a[["bag_total"]])))
+  cl_best <- sum(vapply(ev_mae, function(a) sum(best_of(a)), 1))
+  motor <- grepl("Motor", vapply(studies[distinct], `[[`, "", 1L), fixed = TRUE)
+  cl_best_clean <- sum(vapply(ev_mae[!motor], function(a) sum(best_of(a)), 1))
+  stopifnot(2 * cl_best > 2 * length(ev_mae), 2 * cl_best_clean > 2 * sum(!motor))   # "in most comparisons"
+  n9 <- nrow(ev_nine); cl_wins <- c(sum(abs(ev_nine$cl_next) < abs(ev_nine$bag_next)), sum(abs(ev_nine$cl_total) < abs(ev_nine$bag_total)))
+  stopifnot(2 * cl_wins[1] > n9, 2 * cl_wins[2] > n9)                 # "on most portfolios" (abstract, introduction)
+  mixed <- function(v) any(v < 0) && any(v > 0)
+  sign_txt <- if (all(ev_nine$bag_next < 0) && all(ev_nine$bag_total > 0))
+    sprintf("On all %d generator portfolios the bagged mean underpredicts next year's payments and overpredicts the total%s.", n9,
+            if (mixed(ev_nine$cl_next) && mixed(ev_nine$cl_total)) ", a bias of consistent sign that the chain ladder, whose errors take both signs, does not share" else "") else ""
+  cat(sprintf("Table~\\ref{tab:evaluation} summarises the back-tests of the article and the supplementary material that compare all three methods. Over its %d distinct studies (%s) and the two horizons, the chain ladder has the smallest mean absolute relative error of the three methods in %d of the %d comparisons, and in %d of the %d without the motor dates; on the generator portfolios it is closer than the bagged mean on %d of the %d for next year and on %d for the total. %s These findings concern these portfolios and the default configuration, which is not tuned; the single tree is pruned and the bootstrap trees are not, so their difference is not an effect of averaging alone, and a regularised bagged configuration was not examined on them.",
+    length(ev_mae), paste(tolower(sub("\\$\\^\\\\dagger\\$", "", vapply(studies[distinct], `[[`, "", 1L))), collapse = "; "),
+    cl_best, 2 * length(ev_mae), cl_best_clean, 2 * sum(!motor), cl_wins[1], n9, cl_wins[2], sign_txt))
+  if ("draw_total_rel" %in% names(rl))
+    cat(" Part of the bias comes from the plug-in recursion, which simulated completion removes (Sections~\\ref{sec:revalue} and~\\ref{sec:well-specified}).")
+  cat("\n\n")
+
+  # the IBNR component and the replicate range on the further generator portfolios (deposited)
+  ib1 <- read.csv("results/live/table_backtest_ibnr.csv")$rel_error[1]
+  ibn <- rb$bag_ibnr_next_rel; nin <- sum(as.logical(rb$next_inside_range)); tin <- sum(as.logical(rb$total_inside_range)); n8 <- nrow(rb)
+  w_next <- mean((rb$next_q975 - rb$next_q025) / rb$bag_next); w_tot <- mean((rb$total_q975 - rb$total_q025) / rb$bag_total)
+  ib_dir <- if (all(ibn > 0)) sprintf("On every one of the %d further portfolios, the bagged mean overpredicts next year's IBNR payments, by %s to %s (%s on the shipped portfolio).", n8, pct(min(ibn)), pct(max(ibn)), pct(ib1)) else
+    sprintf("The bagged mean's error for next year's IBNR payments ranges from %s to %s on the %d further portfolios (%s on the shipped portfolio).", pct(min(ibn)), pct(max(ibn)), n8, pct(ib1))
+  ibt <- rb$bag_ibnr_total_rel
+  why_ib <- if (all(ibn > 0)) " (The late-reported claims of this generator are smaller; Section~\\ref{sec:ibnr}.)" else ""
+  cov_txt <- sprintf(" The realised next-year payments lie within the 2.5\\%% to 97.5\\%% replicate range on %d of the %d further portfolios, the realised total on %d.", nin, n8, tin)
+  why_cov <- if (nin == 0 && tin == n8) sprintf(" Neither is a coverage rate (Section~\\ref{sec:bagging}): the ranges, on average %s and %s of the bagged mean, lie around a biased mean.", pct(w_next, 0), pct(w_tot, 0)) else ""
+  cat(ib_dir, why_ib, cov_txt, why_cov, "\n\n", sep = "")
+
+  # open/closed, hirem and the second portfolio, one sentence each
+  oc_txt <- if (file.exists("results/open_closed/table_open_closed.csv")) {
+    oc <- read.csv("results/open_closed/table_open_closed.csv"); ocv <- function(k, h, v) oc[oc$component == k & oc$horizon == h, v]
+    sprintf("A good aggregate can hide a poor allocation: on the shipped portfolio, %s of the predicted reported-claim payments through development year 11 fall on claims already closed at the valuation date, and the open claims are %s (\\supp{5}).",
+            pct(ocv("closed", "total", "mean") / ocv("all", "total", "mean")), signed(ocv("open", "total", "rel_error")))
+  } else missing_txt("results/open\\_closed")
+  hp_txt <- if (file.exists("results/hirem_portfolios/portfolios.csv")) {
+    hp <- read.csv("results/hirem_portfolios/portfolios.csv")
+    e_h <- hp$hirem_open_total / hp$open_truth_total - 1; e_t <- hp$tree_open_total / hp$open_truth_total - 1
+    stopifnot(mean(abs(e_h)) < mean(abs(e_t)))   # the introduction: hirem is the more accurate on open claims
+    sprintf(" On these open claims, the target of \\pkg{hirem}, its mean absolute relative error over the %d generator portfolios is %s, against %s for the single-tree fit (\\supp{7}).", nrow(hp), pct(mean(abs(e_h))), pct(mean(abs(e_t))))
+  } else ""
+  pb_txt <- ""   # the second portfolio (Section S3) is discussed in the supplement
+  cat(oc_txt, hp_txt, pb_txt, "\n\n", sep = "")
+}
+@
+
+\subsection{A correctly specified generator} \label{sec:well-specified}
+
+Every generator above violates the model of Section~\ref{sec:method}, so the back-tests cannot
+tell errors of the implementation from errors of the method. The script
+\code{replication/\allowbreak well\_specified.R} simulates portfolios for which the method is
+correctly specified and the true conditional reserve is known exactly: each of $I = 10$ accident
+years has $n$ claims of three types, a reporting delay of zero to two years and an age feature
+without effect. After reporting, a claim
+pays in development year $l + 1$ with probability $a_{s}(k)\,\delta^{l}$, where $k$ is its type
+and $s = \mathbf{1}\{X_{l} > 0\}$ records whether it paid in year $l$, and a payment is Gamma
+distributed with a mean that depends on the type; nothing is paid after $L = 6$. The one-year
+conditional mean is thus piecewise constant in the type and in $\mathbf{1}\{X_l > 0\}$, the same
+in every accident year, and a regression tree represents it exactly. Given the information at
+$t = 10$, each reported claim's expected future payments follow from an exact recursion over the
+two payment states (verified by simulation and by enumerating all payment paths). Three scenarios differ only in how much a payment in one year
+raises the chance of a payment in the next: strongly, moderately, or not at all ($a_1 = a_0$).
+The estimators are scored on the reported claims against this truth (IBNR claims, for which the
+pooling condition of Section~\ref{sec:ibnr} fails by construction, are left out). 
+<<ablation, echo=FALSE>>=
+# The leaf-size ablation of the bagged mean's next-year bias (replication/well_specified_ablation.R,
+# a cluster job): reported from its deposit when present, else the missing-deposit marker.
+abl_file <- "results/well_specified_ablation/table_summary.csv"
+ablation_txt <- if (!file.exists(abl_file)) {
+  paste("Whether the bias comes from the small leaves of the unpruned bootstrap trees is the question of the leaf-size ablation \\code{replication/\\allowbreak well\\_specified\\_ablation.R}.",
+        missing_txt(abl_file))
+} else {
+  ab <- read.csv(abl_file, stringsAsFactors = FALSE)
+  av <- function(cf, sc, tg = "next_year") ab[ab$config == cf & ab$scenario == sc & ab$target == tg, ]
+  sb <- function(r) { v <- round(100 * r$bias, 2); paste0(if (v < 0) "$-$" else "$+$", formatC(abs(v), format = "f", digits = 2), "\\%") }
+  pair <- function(cf) sprintf("%s and %s", sb(av(cf, "none")), sb(av(cf, "strong")))
+  z <- function(cf, sc, tg = "next_year") { r <- av(cf, sc, tg); r$bias / r$bias_se }
+  scs <- c("none", "strong"); n_abl <- unique(ab$n_per_ay); m_abl <- unique(ab$portfolios)
+  stopifnot(length(n_abl) == 1L, all(c("bag_default", "bag_mb25", "bag_mb100", "bag_pruned", "tree_pruned") %in% ab$config))
+  big_mb <- max(ab$minbucket[ab$config == "bag_mb100"])
+  def_pos <- all(vapply(scs, function(sc) z("bag_default", sc) > 3, TRUE))
+  mb_gone <- all(vapply(scs, function(sc) abs(z("bag_mb100", sc)) < 2.5, TRUE))
+  mb_less <- all(vapply(scs, function(sc) av("bag_mb100", sc)$bias < 0.5 * av("bag_default", sc)$bias, TRUE))
+  pr_same <- all(vapply(scs, function(sc) av("bag_pruned", sc)$bias > 0.5 * av("bag_default", sc)$bias, TRUE))
+  lead <- if (def_pos && mb_gone) sprintf("The bias lies in the small leaves of the unpruned bootstrap trees: with a minimum leaf of %d claims it vanishes within Monte Carlo error", big_mb) else
+    if (def_pos && mb_less) sprintf("Larger leaves of the bootstrap trees reduce the bias, to less than half with a minimum leaf of %d claims", big_mb) else
+    "The leaf size of the bootstrap trees does not account for the bias"
+  prune_txt <- if (pr_same) ", whereas pruning each bootstrap tree at the smallest cross-validated error of its own sample hardly changes it, presumably because copies of a claim drawn into both the training and the validation folds make the cross-validation favour large trees" else
+    ", and pruning each bootstrap tree at the smallest cross-validated error of its own sample reduces it as well"
+  tot_none <- if ("total" %in% ab$target) sprintf(" Without persistence the total is affected alike: %s with the default leaves, %s with a minimum leaf of %d.",
+                                                   sb(av("bag_default", "none", "total")), sb(av("bag_mb100", "none", "total")), big_mb) else ""
+  use_txt <- if (def_pos && (mb_gone || mb_less)) " A user of the bagged mean can therefore set a larger \\code{minbucket} in \\code{control}." else ""
+  sprintf("An ablation on %d portfolios per scenario with $n = %s$ (\\code{replication/\\allowbreak well\\_specified\\_ablation.R}, \\supp{9}) varies the bootstrap trees: their next-year bias without and with strong persistence is %s with \\pkg{rpart}'s default minimum leaf of 7 claims, %s with 25, %s with %d, and %s when every bootstrap tree is pruned by cross-validation, against %s for the pruned single tree. %s%s.%s%s",
+          m_abl, gsub(",", "{,}", fmt(n_abl), fixed = TRUE), pair("bag_default"), pair("bag_mb25"), pair("bag_mb100"), big_mb, pair("bag_pruned"), pair("tree_pruned"),
+          lead, prune_txt, tot_none, use_txt)
+}
+@
+<<well-specified, echo=FALSE, results="asis">>=
+ws_dir <- "results/well_specified"; ws_file <- file.path(ws_dir, "table_summary.csv")
+if (!file.exists(ws_file)) {
+  cat(missing_txt(ws_file), "\n")
+} else {
+  ws <- read.csv(ws_file)
+  wcfg <- read.csv(file.path(ws_dir, "config.csv")); wcfg <- setNames(wcfg$value, wcfg$key)
+  sizes <- sort(unique(ws$n_per_ay)); nmax <- max(sizes)
+  mfmt <- function(n) gsub(",", "{,}", fmt(n), fixed = TRUE)   # a number inside math mode
+  num1 <- function(x) { v <- round(100 * x, 1); if (v == 0) v <- 0; paste0(if (v < 0) "$-$" else "", formatC(abs(v), format = "f", digits = 1)) }
+  est_lab <- c(tree_plugin = "Single tree, plug-in", tree_draw = "Single tree, simulated",
+               bag_plugin = "Bagged mean, plug-in", bag_draw = "Bagged mean, simulated",
+               oracle_plugin = "True means, plug-in")
+  scen_lab <- c(strong = "strong", moderate = "moderate", none = "none")
+  cell <- function(sc, es, n, tg) ws[ws$scenario == sc & ws$estimator == es & ws$n_per_ay == n & ws$target == tg, ]
+  bias_txt <- function(r) if (!nrow(r)) "" else if (is.na(r$bias_se) || r$bias_se == 0) num1(r$bias) else
+    sprintf("%s (%s)", num1(r$bias), formatC(100 * r$bias_se, format = "f", digits = 1))
+  rows <- list()
+  for (sc in names(scen_lab)) for (es in names(est_lab)) {
+    rows[[length(rows) + 1L]] <- c(Persistence = if (es == names(est_lab)[1]) scen_lab[[sc]] else "",
+      Estimator = est_lab[[es]],
+      setNames(vapply(sizes, function(n) bias_txt(cell(sc, es, n, "total")), ""), paste0("$n = ", vapply(sizes, mfmt, ""), "$")),
+      `Next year` = bias_txt(cell(sc, es, nmax, "next_year")))
+  }
+  tab <- as.data.frame(do.call(rbind, rows), stringsAsFactors = FALSE, check.names = FALSE)
+  cat("\\begin{table}[t!]\n\\centering\n\\small\n")
+  latex_table_grouped(tab, groups = list(list(label = "Total reserve", span = length(sizes)), list(label = paste0("$n = ", mfmt(nmax), "$"), span = 1L)),
+                      sub = c(paste0("$n = ", vapply(sizes, mfmt, ""), "$"), "Next year"), first = "Persistence & Estimator",
+                      align = paste0("ll", strrep("r", length(sizes) + 1L)), lead = 2L)
+  cat(sprintf("\\caption{\\label{tab:well-specified}Correctly specified generator: relative bias (\\%%) of the predicted payments of the reported claims against the true conditional reserve, mean over %s portfolios per size $n$ (claims per accident year; Monte Carlo standard error in parentheses), for the total through development year %s and, at the largest size, for next year's payments. Plug-in: completion by the predicted means; simulated: \\code{completion = \"draw\"}; true means, plug-in: the plug-in recursion applied to the true one-year means, without estimation. $B = %s$ replicates, $R = %s$ simulated paths for the single tree.}\n\\end{table}\n",
+              wcfg[["portfolios_per_size"]], wcfg[["L"]], wcfg[["B"]], wcfg[["R_draw"]]))
+  # sentences, computed from the deposit
+  pk <- c("tree_plugin", "tree_draw", "bag_plugin", "bag_draw")
+  nxt <- ws[ws$n_per_ay == nmax & ws$target == "next_year" & ws$estimator %in% pk, ]
+  b <- function(sc, es, n = nmax, tg = "total") cell(sc, es, n, tg)$bias
+  spct <- function(x) { v <- round(100 * x, 1); if (v == 0) return("0.0\\%"); paste0(if (v < 0) "$-$" else "$+$", pct(abs(x))) }   # signed percentage
+  draw_max <- max(abs(ws$bias[ws$n_per_ay == nmax & ws$target == "total" & ws$estimator %in% c("tree_draw", "bag_draw")]))
+  none_tree <- vapply(sizes, function(n) b("none", "tree_plugin", n), 1)
+  nt <- nxt[nxt$estimator %in% c("tree_plugin", "tree_draw"), ]; nb <- nxt[nxt$estimator %in% c("bag_plugin", "bag_draw"), ]
+  up2 <- function(x) paste0(formatC(ceiling(1e4 * x) / 100, format = "f", digits = 2), "\\%")   # a bound, rounded up to 0.01%
+  stopifnot(all(nb$bias > 0), max(abs(nt$bias)) < min(nb$bias))   # the prose: only the bagged mean is biased next year
+  cat(sprintf("Next year's payments use only observed histories, and the single-tree fit recovers them: at $n = %s$ its bias is at most %s in absolute value in every scenario, with Monte Carlo standard errors of at most %s. The bagged mean overpredicts them slightly, by %s to %s with Monte Carlo standard errors of at most %s, also where the history carries no information, so this small upward bias of the averaged unpruned trees remains at the largest portfolio; the pruned single tree, fitted without the bootstrap, shows no such bias, and where the history carries no information it is also unbiased for the total (%s to %s across the sizes). ",
+              mfmt(nmax), up2(max(abs(nt$bias))), up2(max(nt$bias_se)), pct(min(nb$bias)), pct(max(nb$bias)), pct(max(nb$bias_se)),
+              spct(min(none_tree)), spct(max(none_tree))))
+  cat(ablation_txt, "")
+  grows <- all(diff(vapply(sizes, function(n) b("strong", "tree_plugin", n), 1)) > 0)
+  alike <- sign(b("strong", "bag_plugin")) == sign(b("strong", "tree_plugin")) && sign(b("moderate", "bag_plugin")) == sign(b("moderate", "tree_plugin"))
+  cat(sprintf("Where the history carries information, the plug-in recursion is biased for the total, and the bias %s: at $n = %s$ the bias of the single-tree fit is %s with strong and %s with moderate persistence, against %s and %s for the plug-in recursion on the true means, which it approaches with strong persistence; %s (%s and %s). With simulated completion, the bias of the total is at most %s in absolute value for both estimators in every scenario at $n = %s$. ",
+              if (grows) "grows with the portfolio instead of vanishing" else "does not vanish as the portfolio grows",
+              mfmt(nmax), spct(b("strong", "tree_plugin")), spct(b("moderate", "tree_plugin")),
+              spct(b("strong", "oracle_plugin")), spct(b("moderate", "oracle_plugin")),
+              if (alike) "the bagged mean behaves alike" else "the bagged mean differs",
+              spct(b("strong", "bag_plugin")), spct(b("moderate", "bag_plugin")), pct(draw_max), mfmt(nmax)))
+  link <- b("strong", "tree_plugin") > 0 && b("moderate", "tree_plugin") > 0 && draw_max < 0.05
+  if (link) local({   # the last sentence below: simulated completion does not beat the chain ladder there
+    bd <- read.csv(file.path(rev_dir, "bagging_draw.csv")); bdt <- bd[bd$completion == "draw" & bd$component == "total", ]
+    bl0 <- read.csv("results/live/table_benchmarks.csv"); mr0 <- read.csv("results/mtpl_rolling/table_rolling.csv")
+    stopifnot(abs(bdt$total_mean / bdt$total_truth - 1) > abs(bl0$ultimate_rel_error[bl0$method == "chain ladder"]),
+              mean(abs(mr0$total_rel[mr0$method == "bagged mean, simulated completion"])) > mean(abs(mr0$total_rel[mr0$method == "chain ladder"])))
+  })
+  if (link) cat("The plug-in recursion replaces a claim's uncertain next payment by its mean, a small positive amount that the following trees treat like an observed payment, so that with positive persistence a plugged-in mean crosses the split between paying and non-paying claims and overstates later payments; the same mechanism contributes to the upward bias of the bagged totals in the back-tests above, and a smoother dependence on the history, not examined here, may give a smaller bias. The plug-in default is therefore not a consistent estimator of the multi-year reserve where the occurrence of a payment depends sharply on the history, and for totals we recommend \\code{completion = \"draw\"}, although on the shipped portfolio and the motor extract it does not make the bagged mean more accurate than the chain ladder (\\supp{7}, \\supp{8}).")
+  cat("\n")
+}
+@
+
+\subsection{Replicating this paper} \label{sec:replication}
+
+Every number, table and figure of the article and of its supplementary material is read from the
+deposits in \code{results/} of the replication material or computed while knitting; knitting
+stops if a file of a deposit differs from its checksum manifest, and an absent deposit is marked
+in bold. The \code{Makefile} in \code{paper/} has three levels: \code{make render} knits both
+documents from the deposits, computing only the small examples; \code{make replicate} first
+recomputes the deposits of the main examples (about half an hour on four cores);
+\code{make replicate-all} also recomputes every study summarised in
+Section~\ref{sec:evaluation}, which takes hours. The correctly specified simulation of
+Section~\ref{sec:well-specified} is not part of it: its full grid takes about 900 core-hours and
+was run as a Slurm job array (\code{replication/\allowbreak well\_specified.slurm}), as is its
+leaf-size ablation (\code{replication/\allowbreak well\_specified\_ablation.R});
+\code{WS\_QUICK=1 make well-specified} and \code{WSA\_QUICK=1 make well-specified-ablation} run
+small versions in minutes. The standalone script \code{code.R} runs the displayed code and
+recomputes the main examples in a scratch copy, comparing them with the deposits to a relative
+tolerance of $10^{-10}$. With \code{CODE\_QUICK=1} it takes minutes and compares only the first
+$B = 50$ replicates of the live run and of the motor case with the deposited ones; its
+recomputation at $t = 11$ is printed, not compared. The package's vignette
+\code{baggingReserve-jss}, this article as a precompiled PDF, is not re-executed by \code{R CMD check}.
+
+%% =============================================================================
+\section{Summary and discussion} \label{sec:summary}
+
+<<summary-numbers, echo=FALSE>>=
+# the qualitative statements of the first paragraph below
+if (ev_ok) stopifnot(all(ev_nine$bag_next < 0), all(ev_nine$bag_total > 0), 2 * nin < n8,
+                     mean(rl$draw_total_rel) < mean(rl$bag_total_rel))
+oc_share_txt <- if (file.exists("results/open_closed/table_open_closed.csv")) {
+  oc <- read.csv("results/open_closed/table_open_closed.csv")
+  pct(oc$mean[oc$component == "closed" & oc$horizon == "total"] / oc$mean[oc$component == "all" & oc$horizon == "total"])
+} else missing_txt("results/open\\_closed")
+@
+\pkg{baggingReserve} provides a data contract, a recursion engine with a learner interface and two
+completion modes, and back-tests, with the source article's method as the documented default
+baseline. On the portfolios studied here the standard chain ladder is the more accurate method on
+most of them (Section~\ref{sec:evaluation}); the bagged trees are biased with a consistent sign on
+the generator, partly through the plug-in recursion, and good aggregates can rest on offsetting
+errors, across accident years, between components and between open and closed claims
+(\Sexpr{oc_share_txt} of the reported-claim reserve of the shipped portfolio falls on claims
+already closed). On a correctly specified generator the plug-in completion is biased for the total
+where the occurrence of a payment depends on the payment history, and simulated completion, which
+we recommend for totals, removes most of the bias.
+
+The limitations are those of the design. Only static features enter the panel, so neither a
+settlement status that changes over time nor case reserves can be used, and the package cannot
+allocate the reserve between open and closed claims; a settlement layer as in \pkg{hirem} would
+be needed. The IBNR component holds the projected counts fixed and pools the payments of the
+reported claims, which fails where late-reported claims differ in kind; an external count
+projection, from \pkg{ReSurv} say, has to be combined with it outside the package. The trees
+minimise squared error, which gives large payments a strong influence. The package delivers no
+predictive distribution or risk measure of the reserve (Section~\ref{sec:bagging}). The evaluation is limited as well: the
+claim-level estimators are compared with the plain chain ladder only, not with a stronger
+aggregate method such as the double chain ladder or a bootstrap chain ladder, \pkg{hirem} only on
+the open claims, and a tuned configuration of the trees was not examined.
+
+A claim-level method can be expected to do better where the business mix changes, the features
+carry real signal, reported claims carry most of the liability and the late development years have
+enough paying claims; these are expectations, not results of this paper (the one test of a
+changing mix, \supp{6}, was mixed), and \fct{backtest} at several valuation dates checks them.
+
+%% =============================================================================
+\section*{Computational details}
+
+The results in this paper were obtained using \proglang{R}~\Sexpr{paste(R.Version()[6:7], collapse = ".")}
+\citep{R} with \pkg{baggingReserve}~\Sexpr{packageVersion("baggingReserve")} and
+\pkg{rpart}~\Sexpr{packageVersion("rpart")}. The package datasets were generated once with
+\pkg{SynthETIC}~\Sexpr{sub("SynthETIC ", "", grep("SynthETIC", generation, value = TRUE))}
+\citep{Avanzi+Taylor+Wang+Wong:2021, SynthETIC} and the bundled copy of the generator of
+\citet{Wang+Wuthrich:2022}, with its commit identifier recorded in
+\code{data-raw/GENERATION.txt} of the replication material. The paper is knitted with \pkg{knitr} \citep{knitr, Xie:2015},
+parallel execution uses the \pkg{parallel} package of \proglang{R}, and the package tests use
+\pkg{testthat} \citep{Wickham:2011}.
+<<reproduction, echo=FALSE, results="asis">>=
+repro_dir <- "results/reproduction"
+# the package versions recorded by the deposits' sessionInfo files
+si <- c("results/sessionInfo.txt", Sys.glob("results/*/sessionInfo*.txt"))
+si_txt <- unlist(lapply(si, readLines))
+si_v <- sort(unique(sub("baggingReserve_", "", unlist(regmatches(si_txt, gregexpr("baggingReserve_[0-9][0-9.-]*", si_txt))))))
+this_v <- as.character(packageVersion("baggingReserve"))
+platform_file <- file.path(repro_dir, "platform.csv")
+if (file.exists(platform_file)) {
+  # TODO(reproduction): adapt the keys to the file written tonight; expected key/value rows
+  # deposit_platform, rerun_platform, compared, values, max_rel_diff, identical
+  pl <- read.csv(platform_file, stringsAsFactors = FALSE); plv <- setNames(pl$value, pl$key)
+  if (length(si_v) != 1L || si_v != this_v)
+    cat(sprintf("\\textbf{[the deposits record the package versions %s, but the paper is knitted with %s]}\n", paste(si_v, collapse = ", "), this_v))
+  need <- c("deposit_platform", "rerun_platform", "compared", "values", "max_rel_diff", "identical")
+  if (!all(need %in% names(plv))) {
+    cat("\\textbf{[results/reproduction/platform.csv lacks the keys", paste(gsub("_", "\\\\_", setdiff(need, names(plv))), collapse = ", "), "]}\n")
+  } else {
+    sci <- function(x) { e <- floor(log10(x)); sprintf("$%s \\times 10^{%d}$", formatC(x / 10^e, format = "f", digits = 1), e) }
+    cat(sprintf("All deposited results were computed with \\pkg{baggingReserve}~%s on %s. To check portability, %s were rerun on %s; %s. Earlier deposits computed on macOS agree with these to a relative difference of order $10^{-12}$ (\\code{results/\\allowbreak reproduction/}).\n",
+      this_v, gsub("_", "\\\\_", plv[["deposit_platform"]]), gsub("_", "\\\\_", plv[["compared"]]), gsub("_", "\\\\_", plv[["rerun_platform"]]),
+      if (as.logical(plv[["identical"]])) sprintf("all %s compared values are identical", fmt(as.numeric(plv[["values"]])))
+      else sprintf("the %s compared values agree to a relative difference of at most %s, the level of floating-point rounding", fmt(as.numeric(plv[["values"]])), sci(as.numeric(plv[["max_rel_diff"]])))))
+  }
+} else if (file.exists(file.path(repro_dir, "record.csv"))) {
+  # Until the deposits are recomputed with one version (results/reproduction/platform.csv), the
+  # record of the earlier reproduction check is reported.
+  rec <- read.csv(file.path(repro_dir, "record.csv"), stringsAsFactors = FALSE); rec <- setNames(rec$value, rec$key)
+  cat(sprintf("\\textbf{[Version history until the deposits are recomputed with one version:]} the deposits were computed with the development versions %s; rerunning the scripts of the main deposits with version %s reproduced all %s values of the %s deposited tables and objects that were recomputed (script \\code{replication/\\allowbreak compare\\_deposits.R}).\n",
+    paste(si_v, collapse = ", "), rec[["rerun_version"]], fmt(as.numeric(rec[["values"]])), rec[["files"]]))
+}
+@
+\proglang{R} itself and the packages on which \pkg{baggingReserve} depends are available from
+the Comprehensive \proglang{R} Archive Network (CRAN) at \url{https://CRAN.R-project.org/};
+\pkg{baggingReserve} is available from CRAN at
+\url{https://CRAN.R-project.org/package=baggingReserve}; its development version is at
+\url{https://github.com/HeirOfIsildur/baggingReserve}.
+
+\section*{Acknowledgements}
+
+The research of Jan Janou\v{s}ek and Michal Pe\v{s}ta was supported by the Czech Science
+Foundation project GA\v{C}R No.~27-25747L and by the Charles University Grant Agency project
+GA~UK No.~188325.
+
+\section*{Declaration of generative AI and AI-assisted technologies}
+
+During the preparation of this work the authors used generative AI tools to improve their
+English as non-native speakers, to check derivations, formulas and arithmetic, and to assist
+with writing and reviewing the analysis code; the exact reserves of
+Section~\ref{sec:well-specified} were also verified symbolically (\code{replication/\allowbreak
+well\_specified\_truth.wl}). The authors reviewed and edited the
+output and take full responsibility for the content of the publication.
+
+\bibliography{refs}
+
+\end{document}

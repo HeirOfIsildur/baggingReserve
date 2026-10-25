@@ -5,7 +5,9 @@ test_that("a fully developed panel has no future cell and every method copes", {
                    Type = rep(c("a", "b"), 3), stringsAsFactors = FALSE)
   pay <- data.frame(Id = rep(1:6, each = 3), EventYear = rep(1:3, each = 2)[rep(1:6, each = 3)] + rep(0:2, 6),
                     Paid = rep(c(10, 5, 2), 6))
-  p <- claims_panel(cl, pay, t = 10, L = 2, features = "Type")
+  # t = 10 lies beyond the data (which end in year 5): both warnings are expected here
+  expect_warning(p <- claims_panel(cl, pay, t = 10, L = 2, features = "Type", accident_years = 1:3),
+                 "dated in year t = 10")
   expect_true(all(p$observed))
   expect_equal(nrow(baggingReserve:::future_cells(p)), 0L)
   fit <- reserve_tree(p, seed = 1)
@@ -21,7 +23,7 @@ test_that("a fully developed panel has no future cell and every method copes", {
   bag <- bag_reserve(p, B = 2, seed = 1, keep_trees = TRUE)
   expect_equal(dim(predict(bag)$reported), c(0L, 2L))
   expect_equal(dim(predict(bag, newdata = p)$reported), c(0L, 2L))
-  bt <- backtest(res, cl, pay)
+  expect_warning(bt <- backtest(res, cl, pay), "no transaction after t")
   expect_equal(bt$tables$total$truth, 0)
   grDevices::pdf(NULL); on.exit(grDevices::dev.off(), add = TRUE)
   expect_error(plot(res, "next_year"), "no future cell")

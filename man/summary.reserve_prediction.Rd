@@ -15,30 +15,40 @@
 \item{object}{A \link{reserve_prediction}.}
 
 \item{probs}{Probabilities of the empirical quantiles (numeric in \verb{[0, 1]}; default
-\code{c(0.025, 0.25, 0.5, 0.75, 0.975, 0.995)}).}
+\code{c(0.025, 0.25, 0.5, 0.75, 0.975, 0.995)}). The \verb{q99.5\%} column is the 99.5\% quantile of the
+replicate (or simulated) predictions, as described above, not the 99.5\% value at risk of the
+Solvency II capital requirement nor an upper prediction bound for the payments; \code{print()}
+says so for every probability of 0.99 or more.}
 
 \item{type}{Quantile type passed to \code{\link[stats:quantile]{stats::quantile()}}, an integer from 1 to 9. The
 source article used order statistics of 10,000 replicates, which corresponds to
 \code{type = 1}; the default is R's \code{type = 7}.}
 
-\item{...}{Unused.}
+\item{...}{Not used; an argument given here (e.g. a misspelt \code{probs}) is an error.}
 }
 \value{
 An object of class \code{"summary.reserve_prediction"}: a list with \code{tables}, a
 named list of one matrix per component (rows: future calendar years and \code{total};
 columns: \code{mean}, \code{sd}, \code{min}, the quantiles, \code{max}; \code{sd} is \code{NA} and only \code{mean} is
-printed when the prediction has a single column), plus \code{B}, \code{estimator}, \code{probs},
-\code{type}, \code{t} and \code{L}.
+printed when the prediction has a single column), plus \code{B}, \code{estimator}, \code{completion},
+\code{variability}, \code{probs}, \code{type}, \code{t} and \code{L}.
 }
 \description{
 Summarises the future payments by component and calendar year across the retained
 replicate predictions: for every available component (reported-claim payments, IBNR
 component, total) and every future calendar year plus the total through development
 year \code{L}, the mean, standard deviation and empirical quantiles across the replicates.
-The quantiles are those of single-tree reserve predictions under the bootstrap
-resampling of \code{\link[=bag_reserve]{bag_reserve()}}; they describe resampling variation and are neither
-prediction intervals for the future payments nor confidence intervals for the bagged
-mean.
+What the quantiles describe depends on the prediction, whose \code{variability} records it (see
+\code{\link[=predict.reserve_tree]{predict.reserve_tree()}}): for the replicates of \code{\link[=bag_reserve]{bag_reserve()}}, each made by the trees of one
+bootstrap sample (unpruned by default, unlike the pruned trees of \code{\link[=reserve_tree]{reserve_tree()}}), the
+resampling variation of the bagged trees; for the simulated completions of a single-tree fit
+(\code{predict(fit, completion = "draw")}), the process variability of payments simulated from that
+one fitted model, without estimation variability; for a bagged fit with
+\code{completion = "draw"}, the resampling variation of one set of bootstrap trees (samples drawn
+per development year) together with one simulated completion from each. They are in no case
+prediction intervals for the future payments
+(the IBNR claim counts are held fixed and the model is taken as given) nor confidence
+intervals for the mean. The printed summary states which case applies.
 }
 \examples{
 data("synthetic_claims", "synthetic_payments", package = "baggingReserve")

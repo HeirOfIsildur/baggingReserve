@@ -1,5 +1,5 @@
 \documentclass[a4paper,11pt]{article}
-%\VignetteIndexEntry{Reserving with regression trees and bagging: a short tour}
+%\VignetteIndexEntry{Claim-level reserving and back-testing: a short tour}
 %\VignetteEngine{knitr::knitr}
 %\VignetteEncoding{UTF-8}
 \usepackage[margin=2.5cm]{geometry}
@@ -15,13 +15,17 @@ knitr::opts_chunk$set(comment = "#>", collapse = TRUE, fig.align = "center", fig
 options(width = 80, digits = 4, scipen = 8)
 @
 
-This vignette walks through the workflow of the package, the method of
+This vignette walks through the workflow of the package: a data contract that turns claims and
+payment transactions into a claim-by-development-year panel, a recursion engine that completes
+the payment history of every reported claim, by default with the regression trees and bagging of
 Janou\v{s}ek and Pe\v{s}ta (2025), \emph{Bagging and regression trees in individual claims
-reserving}, Statistical Papers 66(4), on the shipped synthetic portfolio (generated with the
-article's simulator under another seed; not the article's data), with a small number of
-bootstrap replicates so that it builds quickly. The accompanying Journal of Statistical Software
-manuscript describes the method and the design in full and back-tests the method on this
-portfolio, on a public motor third-party liability portfolio and on further synthetic portfolios.
+reserving}, Statistical Papers 66(4), and a back-test against the payments that followed. It
+uses the claims of types 2 and 3 of the shipped synthetic portfolio (generated with the article's
+simulator under another seed; not the article's data) and few bootstrap replicates, so that it
+builds quickly. The accompanying Journal of Statistical Software manuscript, shipped as the
+vignette \texttt{baggingReserve-jss}, describes the method and the design in full and back-tests
+the method on the whole portfolio, on an illustrative motor third-party liability dataset (a subset of an insurer's data, drawn in an undocumented way and published in a public code repository) and on
+further synthetic portfolios.
 
 \section*{From claims and payments to a panel}
 
@@ -32,8 +36,9 @@ refuses input it cannot interpret.
 <<panel>>=
 library("baggingReserve")
 data("synthetic_claims", "synthetic_payments", package = "baggingReserve")
-panel <- claims_panel(synthetic_claims, synthetic_payments, t = 12, L = 11,
-                      features = c("Type", "Age", "AccWeekday"))
+cl <- synthetic_claims[synthetic_claims$Type %in% c("2", "3"), ]
+pay <- synthetic_payments[synthetic_payments$Id %in% cl$Id, ]
+panel <- claims_panel(cl, pay, t = 12, L = 11, features = c("Type", "Age", "AccWeekday"))
 panel
 round(as_triangle(panel) / 1e6, 1)
 @
@@ -51,39 +56,67 @@ pred_tree <- predict(tree)
 pred_tree
 @
 
+By default each predicted mean is plugged into the history used by the next tree, as in the
+source article. Where the occurrence of a payment depends on the payment history, this biases
+the payments after next year; simulating the payments instead (\texttt{completion = "draw"})
+removes that mechanism, and it is the recommended completion for totals beyond next year. The
+next year's payments are the same in expectation under both.
+<<tree-draw>>=
+pred_draw <- predict(tree, completion = "draw", R = 50, seed = 1)
+cbind(plug_in = calendar_year_payments(pred_tree)[, 1],
+      simulated = rowMeans(calendar_year_payments(pred_draw)))[c(1, 11, 12), ]
+@
+
 \section*{Bagging, out-of-bag scores, IBNR}
 
 \texttt{bag\_reserve()} grows a bootstrap tree per development year and replicate, completes
-the panel once per replicate, and records the out-of-bag predictions (``votes''). The $B = 20$ replicates used here demonstrate
-the interface; they are far too few for stable tail quantiles. The manuscript uses 1000 for its
-live run and 10,000 for the deposited full run.
+the panel once per replicate, and records the out-of-bag predictions (``votes''). The $B = 20$
+replicates used here demonstrate the interface; they are far too few for stable tail quantiles.
+The manuscript uses 1000 for its live run and 10,000 for the deposited full run.
 <<bagging>>=
-bag <- bag_reserve(panel, B = 20, seed = 2026, ncores = 2)
+bag <- bag_reserve(panel, B = 20, seed = 2026)
 oob_score(bag)[, c("period", "n_train", "coverage", "oob_score")]
 res <- ibnr_reserve(predict(bag), claim_counts(panel))
 res
 summary(res, probs = c(0.025, 0.5, 0.975))$tables$total
 @
 
-The quantiles are empirical quantiles of single-tree reserve predictions under the bootstrap
-resampling; they describe resampling variation and are neither prediction intervals for the
-future payments nor confidence intervals for the bagged mean.
+The quantiles are empirical quantiles, over the replicates, of the reserve predicted by one set
+of unpruned bootstrap trees (one per development year); they describe this resampling variation
+and are neither prediction intervals for the future payments nor confidence intervals for the
+bagged mean. For a bagged fit the completion is chosen when fitting:
+<<bagging-draw>>=
+bag_draw <- bag_reserve(panel, B = 20, seed = 2026, completion = "draw")
+res_draw <- ibnr_reserve(predict(bag_draw), claim_counts(panel))
+@
 
 \section*{Comparators and back-test}
 
 The shipped truth allows a back-test against the payments that actually followed. The truth
 tables must describe the same portfolio as the prediction, including the claims reported after
-the valuation date: a subset must be selected by the same criterion as the panel, never by the
-identifiers of the reported claims.
+the valuation date: a subset is selected by the same criterion as the panel (here the claim
+type), never by the identifiers of the reported claims. The chain ladder on the panel's paid
+triangle is scored against the same truth.
 <<backtest>>=
 data("synthetic_claims_full", "synthetic_payments_full", package = "baggingReserve")
-bt <- backtest(res, synthetic_claims_full, synthetic_payments_full)
-bt$tables$total[, c("calendar", "truth", "predicted", "rel_error")]
-chain_ladder(as_triangle(panel))
+cl_full <- synthetic_claims_full[synthetic_claims_full$Type %in% c("2", "3"), ]
+pay_full <- synthetic_payments_full[synthetic_payments_full$Id %in% cl_full$Id, ]
+cl_ref <- chain_ladder(as_triangle(panel))
+bt <- backtest(res, cl_full, pay_full, reference = cl_ref)
+bt$tables$total[, c("calendar", "truth", "predicted", "rel_error", "reference_rel_error")]
+bt_draw <- backtest(res_draw, cl_full, pay_full)
+bt_draw$tables$total[c(1, 12), c("calendar", "truth", "predicted", "rel_error")]
 @
 
 <<plot, fig.cap="Predicted payments by calendar year with the realised payments.">>=
 plot(res, "calendar", truth = setNames(bt$tables$total$truth, bt$tables$total$calendar))
 @
+
+A back-test at one valuation date is one draw of the error. Valuing the data at several earlier
+dates (\texttt{claims\_panel(..., future\_payments = "drop")}, see the manuscript) gives an
+empirical distribution of the errors of the claim-level method and of the chain ladder on one's
+own data. These errors are a descriptive diagnostic, not independent validation samples: the
+valuation dates share claims and payments, and the horizon usually changes with the date, so they
+are dependent and do not give a calibrated predictive distribution.
 
 \end{document}

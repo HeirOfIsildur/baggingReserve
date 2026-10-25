@@ -137,7 +137,7 @@ test_that("integer payments do not overflow and observed cells stay finite", {
 
 test_that("malformed years, infinite features, future accident years and impossible payments are rejected", {
   bad <- toy_claims; bad$RepYear <- as.character(bad$RepYear); bad$RepYear[2] <- "2o22"
-  expect_error(claims_panel(bad, toy_payments, t = 3, L = 2), "not integers")
+  expect_error(claims_panel(bad, toy_payments, t = 3, L = 2), "not integers, e.g. \"2o22\"")
   inf <- toy_claims; inf$Age[1] <- Inf
   expect_error(claims_panel(inf, toy_payments, t = 3, L = 2, features = "Age"), "infinite")
   expect_error(claims_panel(toy_claims, toy_payments, t = 3, L = 2, accident_years = 1:4),
@@ -175,4 +175,26 @@ test_that("triangles are classed matrices that print without their attributes", 
   out_p <- capture.output(print(pt))
   expect_match(out_p[1], "reported claims")
   expect_false(any(grepl("not observable", out_p)))
+})
+
+test_that("claims after the valuation date are dropped alike, and missing reporting years warn", {
+  # an accident year after t is dropped like a claim reported after t, and counted
+  late_acc <- rbind(toy_claims, data.frame(Id = "f", AccYear = 4, RepYear = 4, Type = "x", Age = 20))
+  pays <- rbind(toy_payments, data.frame(Id = "f", EventYear = 4, Paid = 3))
+  p0 <- claims_panel(toy_claims, toy_payments, t = 3, L = 2, features = "Type", future_payments = "drop")
+  p <- claims_panel(late_acc, pays, t = 3, L = 2, features = "Type", future_payments = "drop")
+  expect_identical(p$payments, p0$payments)
+  expect_identical(p$claims, p0$claims)
+  expect_equal(p$diagnostics$n_unreported_dropped, p0$diagnostics$n_unreported_dropped + 1L)
+  # its payment dated by t would contradict the claims table, as for a late-reported claim
+  expect_error(claims_panel(late_acc, rbind(pays, data.frame(Id = "f", EventYear = 3, Paid = 1)),
+                            t = 3, L = 2, future_payments = "drop"), "not reported by t")
+  # a missing reporting year is treated as not reported, with a warning
+  na_rep <- toy_claims; na_rep$RepYear[2] <- NA
+  expect_warning(p_na <- claims_panel(na_rep, toy_payments[toy_payments$Id != "b", ], t = 3, L = 2,
+                                      future_payments = "drop"), "1 claim\\(s\\) have no reporting year")
+  expect_false("b" %in% p_na$claims$id)
+  na_del <- toy_claims; na_del$RepYear <- NULL; na_del$Delay <- c(0, NA, 0, 1, 0)
+  expect_warning(claims_panel(na_del, toy_payments[toy_payments$Id != "b", ], t = 3, L = 2, rep_delay = "Delay",
+                              future_payments = "drop"), "no reporting delay")
 })

@@ -20,7 +20,8 @@ claims_panel(
   features = character(),
   accident_years = NULL,
   na_features = c("fail", "surrogate"),
-  future_payments = c("error", "drop")
+  future_payments = c("error", "drop"),
+  beyond_L = c("error", "drop")
 )
 
 \method{summary}{claims_panel}(object, ...)
@@ -35,10 +36,14 @@ in the same year are summed).}
 
 \item{t}{Valuation (reserving) date, an integer year on the same grid as the accident
 and event years. Claims reported after \code{t} and payments after \code{t} are not part of
-the panel.}
+the panel. The grid need not be yearly: any integer time unit works (quarters or months
+numbered consecutively, say), and "development year" then means development period.}
 
 \item{L}{Maximal development year; payments have columns \verb{X0, ..., XL}. It is not
-inferred from the data.}
+inferred from the data. The fitting functions need training claims for the model of every
+development year up to \code{L - 1}, i.e. claims with \code{acc_year + L <= t}; when the latest accident
+year is \code{t}, \code{L} is therefore at most the number of accident years less one (\code{\link[=reserve_tree]{reserve_tree()}}
+and \code{\link[=bag_reserve]{bag_reserve()}} stop otherwise, naming the development years without training claims).}
 
 \item{id}{Name of the claim identifier column, either one name used in both tables
 or \code{c(claims = , payments = )}.}
@@ -62,20 +67,38 @@ need not be listed. No feature is ever picked up automatically.}
 \item{accident_years}{Optional integer vector of accident years defining the rows of
 the aggregate triangles. The default runs from the earliest to the latest accident
 year with a reported claim, gaps included. Accident years after the latest one are
-not added, because a portfolio in run-off has none; when recent accident years have no
-reported claim yet (a long-tail line), pass them, e.g. \code{accident_years = first:t}, so
-that their rows exist. The chain ladder projects no IBNR claims from an empty row, and
-\code{\link[=ibnr_reserve]{ibnr_reserve()}} warns about such years.}
+not added, because a portfolio in run-off has none; when that latest year is before \code{t},
+a warning says so, since otherwise the most recent accident years, whose claims may all be
+reported later (a long-tail line, a new line of business), would silently have neither a row
+nor an IBNR component. To include them, pass them, e.g. \code{accident_years = first:t}: their rows
+then exist (empty), but the chain ladder projects no IBNR claims from an empty row, so
+\code{\link[=ibnr_reserve]{ibnr_reserve()}} warns again and their IBNR payments must be estimated outside the package
+(see \code{\link[=ibnr_reserve]{ibnr_reserve()}}). For a portfolio that wrote no business in those years, pass
+\code{accident_years = first:last} to state this and silence the warning.}
 
 \item{na_features}{\code{"fail"} (default) refuses missing feature values; \code{"surrogate"}
-keeps them for \pkg{rpart}'s surrogate-split handling.}
+keeps them for \pkg{rpart}'s handling of missing values: a claim whose value of the split
+feature is missing is sent down by the first surrogate split it has a value for, and by the
+majority direction of the split when no surrogate resolves it (with rpart's defaults
+\code{usesurrogate = 2}, \code{maxsurrogate = 5}; a user-supplied \code{control} changes this). Claims
+with a missing value do not count when a split on that feature is chosen.}
 
 \item{future_payments}{\code{"error"} (default) refuses payments dated after \code{t};
 \code{"drop"} discards them and records how many and how much.}
 
+\item{beyond_L}{\code{"error"} (default) refuses reported claims with a reporting delay above \code{L}
+and observed payments in development years after \code{L}, which are outside the model; \code{"drop"}
+discards them (such claims together with all their payments) and records how many and how
+much (\code{n_claims_beyond_L_dropped}, \code{n_payments_beyond_L_dropped},
+\code{amount_beyond_L_dropped}), for a long history whose oldest accident years have developed
+beyond \code{L}. The identifiers of the claims set aside are kept (\code{beyond_L_ids}) and passed on to
+the predictions made from the panel, so that \code{\link[=backtest]{backtest()}} accepts the complete claims and
+payments tables: it does not count these claims as missing from the prediction, and their
+payments after \code{t}, all beyond development year \code{L}, are part of the excluded tail it reports.}
+
 \item{object}{A \code{claims_panel} (for \code{summary}).}
 
-\item{...}{Unused.}
+\item{...}{For \code{summary}, not used: an argument given there is an error. Ignored by \code{as.data.frame}.}
 
 \item{x}{A \code{claims_panel} (for \code{as.data.frame}).}
 }
@@ -87,7 +110,10 @@ An object of class \code{"claims_panel"}: a list with elements
 \item{observed}{logical matrix of the same shape, \code{TRUE} where \code{acc_year + l <= t}}
 \item{t, L, accident_years, I}{valuation date, horizon, accident years, their number}
 \item{features, feature_levels}{the feature names and the factor levels}
-\item{mapping, diagnostics, call}{column mapping, construction counts, the call}
+\item{mapping, diagnostics, call}{column mapping (carried into the predictions, where
+\code{\link[=backtest]{backtest()}} uses it as its default column names), construction counts, the call}
+\item{beyond_L_ids}{identifiers of the reported claims set aside by \code{beyond_L = "drop"}
+(empty otherwise)}
 }
 }
 \description{
@@ -99,13 +125,20 @@ valuation date are \code{NA}; observed cells without payments are \code{0}.
 }
 \details{
 The constructor enforces the valuation date on both tables: claims are kept only if
-reported by \code{t} (reporting year \verb{<= t}), payments only if made by \code{t}. It preserves
+reported by \code{t} (reporting year \verb{<= t}), payments only if made by \code{t}. Claims reported after
+\code{t} are dropped, and so are claims whose accident year is after \code{t} (they cannot be reported
+by \code{t}); both are counted in \code{n_unreported_dropped}. A claim without a reporting year (or
+delay) is treated as not reported by \code{t} and dropped, with a warning, since a missing date is
+more often a data defect than a late report. It preserves
 recoveries (negative payments), keeps reported claims without any payment, and
 refuses input it cannot interpret: duplicated or missing identifiers, payments on
 claims absent from \code{claims}, payments before the accident or reporting year,
-reporting delays or observed payments beyond \code{L}, and payments after \code{t} unless
-\code{future_payments = "drop"} is given explicitly (the dropped number and amount are
-recorded in the diagnostics).
+reporting delays or observed payments beyond \code{L} unless \code{beyond_L = "drop"} is given, and
+payments after \code{t} unless \code{future_payments = "drop"} is given explicitly (the dropped numbers
+and amounts are recorded in the diagnostics). Payments dated before the recorded reporting year (advance
+payments, or reporting dates corrected after a first payment) are refused: move such a
+payment to the reporting year, or correct the reporting year, before calling the
+constructor.
 }
 \examples{
 claims <- data.frame(Id = c("a", "b", "c"), AccYear = c(1, 1, 2), RepYear = c(1, 2, 2),

@@ -12,7 +12,8 @@
   truth = NULL,
   reference = NULL,
   main = NULL,
-  ...
+  ...,
+  type = 7L
 )
 }
 \arguments{
@@ -27,14 +28,21 @@ component), \code{"reported"} or \code{"ibnr"}.}
 (default \code{c(0.025, 0.975)}).}
 
 \item{truth}{Optional realised payments (default \code{NULL}, none drawn): for \code{"calendar"}
-a vector named by calendar year, e.g. \code{setNames(bt$tables$total$truth, bt$tables$total$calendar)} from a \code{\link[=backtest]{backtest()}}, for the others a single number.}
+a vector named by calendar year, e.g. \code{setNames(bt$tables$total$truth, bt$tables$total$calendar)} from a \code{\link[=backtest]{backtest()}}, or an unnamed vector with one value per
+future calendar year; for the others a single number.}
 
 \item{reference}{Optional named numeric vector of reference estimates drawn as dotted
 vertical lines (\code{"next_year"}, \code{"ultimate"}); default \code{NULL}.}
 
 \item{main}{Title; \code{NULL} (default) builds one from the display and the estimator.}
 
-\item{...}{Further arguments passed to the underlying plotting function.}
+\item{...}{Further graphical arguments passed to the underlying plotting function
+(\code{\link[graphics:plot]{graphics::plot()}} for \code{"calendar"}, \code{\link[graphics:hist]{graphics::hist()}} or \code{\link[graphics:stripchart]{graphics::stripchart()}}
+otherwise); they override the defaults (e.g. \code{ylab}, \code{ylim}, \code{xlab}, \code{col}).}
+
+\item{type}{Quantile algorithm for the band and the quantile lines, as in
+\code{\link[stats:quantile]{stats::quantile()}} (an integer from 1 to 9; default 7, as in \code{\link[=summary.reserve_prediction]{summary.reserve_prediction()}}
+and \code{\link[=backtest]{backtest()}}); it must be named.}
 }
 \value{
 \code{x}, invisibly.
@@ -51,9 +59,12 @@ individual points otherwise; vertical lines mark the bagged mean (solid black), 
 replicate quantiles (dashed grey), the \code{truth} (dot-dashed blue) and any \code{reference}
 values (dotted green, e.g. a chain-ladder estimate).}
 }
-Bands and quantiles are empirical quantiles over the bootstrap replicates and are
-labelled as such; they describe resampling variation and are neither prediction
-intervals nor confidence intervals for the bagged mean.
+Bands and quantiles are empirical quantiles over the columns of the prediction and are
+labelled by what these are: the bootstrap replicates of a bagged fit (resampling variation,
+with simulated payments as well for \code{completion = "draw"}) or the simulated completions of a
+single-tree fit (process variability given the one fitted model); see the \code{variability} of
+\code{\link[=predict.reserve_tree]{predict.reserve_tree()}}. They are neither prediction intervals nor confidence intervals for
+the mean.
 }
 \examples{
 data("synthetic_claims", "synthetic_payments", "synthetic_claims_full",

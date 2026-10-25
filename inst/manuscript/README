@@ -1,0 +1,22 @@
+Source of the vignette baggingReserve-jss
+========================================
+
+The vignette baggingReserve-jss (vignette("baggingReserve-jss")) is the manuscript submitted to
+the Journal of Statistical Software, shipped as a precompiled PDF. This directory holds its source:
+
+  baggingReserve-jss.Rnw   knitr source of the PDF (the manuscript with the "nojss" class option
+                           and a note under the abstract)
+  refs.bib                 its bibliography
+
+The PDF is not rebuilt with the package. Knitting the source reads the deposited results of the
+replication material that accompanies the submission (results/, about 7 MB, computed over several
+hours with up to 10,000 bootstrap replicates) and its scripts (replication/), and it needs the JSS
+LaTeX style files (jss.cls, jss.bst, jsslogo.jpg) from the journal's author instructions
+(https://www.jstatsoft.org/). With these in place, in the paper/ directory of the replication
+material:
+
+  Rscript -e 'knitr::knit("baggingReserve-jss.Rnw")'
+  latexmk -pdf -bibtex baggingReserve-jss.tex
+
+The PDF in the package was knitted with the package version named in its note. The
+supplementary material (supplement.Rnw) is part of the replication material, not of the package.

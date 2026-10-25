@@ -34,10 +34,11 @@ claim_counts(x)
 \code{"cumulative"} triangle.}
 
 \item{...}{Passed on by the generic to its methods and by \code{print} to the matrix
-printing method; unused otherwise.}
+printing method; in the methods, an argument that is not one of theirs (a misspelt one, say)
+is an error.}
 
 \item{component}{\code{"reported"}, \code{"ibnr"} or \code{"total"}; without an IBNR component
-\code{"total"} falls back to \code{"reported"}.}
+\code{"total"} falls back to \code{"reported"}, with a warning.}
 
 \item{replicate}{Replicate to display, or \code{"mean"} for the average over replicates.}
 
